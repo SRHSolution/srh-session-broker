@@ -172,7 +172,9 @@ def doctor(b: Any) -> list[dict[str, str]]:
             sdk = False
         lvl = "ok" if key and sdk else "warn"
         add(lvl, f"Jev 라우터 (mode={mode})", f"키 {'있음' if key else '없음'} · SDK {'있음' if sdk else '없음'}",
-            "" if lvl == "ok" else "선택 사항 — 없으면 이름·역할·규칙으로만 라우팅. 쓰려면 pip install 'srh-session-broker[jev]' 와 TYPESAFE_API_KEY")
+            "" if lvl == "ok" else "선택 사항 — 없으면 이름·역할·규칙으로만 라우팅. 쓰려면 "
+            + ("TYPESAFE_API_KEY 를 환경 변수나 ~/.srhbroker/.env 에 설정" if sdk else
+               "uv tool install --force \"srh-session-broker[jev] @ git+https://github.com/SRHSolution/srh-session-broker\" 후 TYPESAFE_API_KEY 설정"))
     else:
         add("ok", "라우터", f"mode={mode} (Jev 사용 안 함)")
 

@@ -50,7 +50,7 @@ Claude Code 창과 Codex 창을 여러 개 띄워 일하면, 한 창에서 다�
 | [herdr](https://herdr.dev) | 선택(권장) | 받는 창에 바로 넣기. 없으면 Claude Stop hook·inbox 로 받습니다 |
 | TypeSafe API 키 | 선택 | 대상을 생략했을 때 AI 가 역할을 고름 (`TYPESAFE_API_KEY`) |
 
-Windows 11 에서 개발·검증했습니다. macOS·Linux 도 경로·프로세스 처리를 맞춰 두었지만 실사용 검증 전입니다 — 문제가 있으면 이슈로 알려 주세요.
+Windows 11 과 macOS(Apple Silicon)에서 설치·실행을 확인했습니다. Linux 는 같은 POSIX 경로로 동작할 것으로 보지만 실사용 검증 전입니다 — 문제가 있으면 이슈로 알려 주세요.
 
 ### 1) 설치
 
@@ -400,7 +400,8 @@ worker 세션은 턴의 **최종 응답이 자동으로 회신**됩니다. 턴 �
 | Jev(`typesafe-sdk` 0.7.2) 실제 호출 (`.env` 키, route Choice + hw_risk/needs_human Noul) | ✅ Windows에서 실제 키로 확인 |
 | Windows 실행 (`.cmd` shim, `taskkill`, `msvcrt` 잠금) | ✅ Windows 11 에서 매일 사용 |
 | 새 PC 설치 (`uv tool install` → `init` → `setup --apply` → `doctor` → `demo`) | ✅ 빈 환경에서 확인 (2026-10-09) |
-| macOS · Linux | ⚠️ 경로·프로세스 처리는 대응, 실사용 검증 전 |
+| macOS 26.6 (Apple Silicon) | ✅ GitHub 에서 `uv tool install` → `init` → `setup --apply` → `doctor` → `demo` · 웹 대시보드, 테스트 195개 통과, 데몬이 실제 `codex exec` worker 를 실행·회신 (2026-10-09) |
+| Linux | ⚠️ macOS 와 같은 POSIX 경로로 동작할 것으로 보지만 실사용 검증 전 |
 
 ## 개발
 
