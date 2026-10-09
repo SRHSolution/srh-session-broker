@@ -162,6 +162,14 @@ def doctor(b: Any) -> list[dict[str, str]]:
     add = lambda level, item, detail="", fix="": rows.append({"level": level, "item": item, "detail": detail, "fix": fix})
 
     add("ok" if sys.version_info >= (3, 11) else "fail", "Python", sys.version.split()[0], "Python 3.11 이상 필요")
+    from .updater import background_check
+    u = background_check(b) or {}
+    if u.get("available"):
+        add("warn", "버전", f"{u['current']} → 새 버전 {u['latest']} 있음", "srhbroker update")
+    elif u.get("latest"):
+        add("ok", "버전", f"{u['current']} (최신)")
+    else:
+        add("info", "버전", f"{u.get('current') or ''} · 최신 버전 확인 못 함" + (f" ({u['error']})" if u.get("error") else ""))
     on_path = shutil.which("srhbroker")
     add("ok" if on_path else "warn", "srhbroker 명령", on_path or f"PATH 에 없음 (실행 파일: {exe_command()})",
         "" if on_path else "uv tool install / pipx 로 설치하면 PATH 에 들어갑니다. 아니면 설정에 절대 경로를 씁니다")

@@ -108,6 +108,7 @@ h2 { font-size: 14px; margin: 0; font-weight: 800; }
 .row .ex { grid-column: 3 / 5; color: var(--muted); font-size: 13px; overflow-wrap: anywhere;
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .s-done, .s-sent { color: var(--ok); } .s-failed, .s-timeout, .s-expired, .s-not_delivered { color: var(--bad); }
+.upd { color: var(--wait); }
 .s-queued, .s-held, .s-needs_routing { color: var(--wait); } .s-cancelled, .s-dropped { color: var(--muted); }
 .s-delivered, .s-running { color: var(--codex); }
 .more { display: block; width: 100%; padding: 10px; border: 0; border-top: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer; }
@@ -369,7 +370,8 @@ async function refresh() {
   if (document.hidden || armed || typing) return;
   try {
     snap = await api("/api/snapshot");
-    $("engine").innerHTML = engineLine(snap.daemon);
+    $("engine").innerHTML = engineLine(snap.daemon) + (snap.update && snap.update.available
+      ? ` · <span class="upd" title="터미널에서 srhbroker update 로 올립니다">새 버전 <b>${esc(snap.update.latest)}</b> — srhbroker update</span>` : "");
     $("clock").textContent = `${new Date().toLocaleTimeString("ko-KR")} 갱신`;
     renderAttention(); renderSessions();
   } catch (err) { $("engine").innerHTML = `<span class="bad">불러오지 못했습니다: ${esc(err.message)}</span> — srhbroker dashboard 가 실행 중인지, 출력된 주소로 열었는지 확인하세요.`; return; }

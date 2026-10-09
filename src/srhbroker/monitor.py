@@ -212,7 +212,9 @@ def snapshot(b: Any, *, task_limit: int = 50, flow_limit: int = 100) -> dict[str
 
     err = home / "hook-error.log"
     errors = err.read_text(encoding="utf-8", errors="replace")[-2000:] if err.exists() else ""
+    from .updater import cached
     return {"generated_at": now.isoformat(timespec="seconds"), "home": str(home), "daemon": daemon, "herdr": avail,
+            "update": cached(home),
             "sessions": sessions, "attention": attention, "tasks": tasks, "flows": flows, "stats": stats,
             "hook_errors": errors}
 

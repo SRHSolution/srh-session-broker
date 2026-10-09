@@ -19,6 +19,7 @@
   srhbroker setup claude|codex [--apply]  MCP·hook 설정 예시 출력 (--apply: 백업 후 사용자 설정에 적용)
   srhbroker doctor                    설치·연결 점검 (읽기 전용, 고칠 명령 안내)
   srhbroker demo [--home DIR]         예시(팬텀) 데이터로 watch·대시보드 체험 (실제 데이터와 분리)
+  srhbroker update [--check] [--to vX.Y.Z] [--stop-all]   git 배포(저장소 태그)로 업데이트
 """
 
 from __future__ import annotations
@@ -121,6 +122,8 @@ def main(argv: list[str] | None = None) -> int:
     load_dotenv()  # mcp·hook·daemon 모두 이 진입점을 거친다
     p = argparse.ArgumentParser(prog="srhbroker", description="Claude ↔ Codex 세션 브로커")
     p.add_argument("-v", "--verbose", action="store_true")
+    from . import __version__
+    p.add_argument("--version", action="version", version=f"srhbroker {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("init")
@@ -204,11 +207,17 @@ def main(argv: list[str] | None = None) -> int:
     su.add_argument("provider", choices=["claude", "codex"])
     su.add_argument("--apply", action="store_true", help="사용자 설정 파일에 적용 (백업을 남기고, 이미 있는 항목은 두고 없는 것만 추가)")
     sub.add_parser("doctor")
+    up = sub.add_parser("update", help="git 배포(저장소의 vX.Y.Z 태그)로 업데이트")
+    up.add_argument("--check", action="store_true", help="새 버전이 있는지만 본다")
+    up.add_argument("--to", default=None, help="이 태그로 (예: v0.3.0) — 기본: 최신 태그")
+    up.add_argument("--stop-all", action="store_true",
+                    help="Windows: 설치를 잠그는 srhbroker 프로세스(데몬·대시보드·세션 MCP 서버)를 끝내고 진행")
+    up.add_argument("--no-restart", action="store_true", help="업데이트 뒤 데몬을 다시 띄우지 않는다")
     dm = sub.add_parser("demo")
     dm.add_argument("--home", default=None, help="예시 데이터를 둘 폴더 (기본: 임시 폴더의 srhbroker-demo)")
 
     a = p.parse_args(argv)
-    quiet = a.cmd in ("init", "setup", "doctor", "demo")   # 사람에게 보여 주는 점검·설정 명령은 진행 로그를 숨긴다
+    quiet = a.cmd in ("init", "setup", "doctor", "demo", "update")   # 사람에게 보여 주는 점검·설정 명령은 진행 로그를 숨긴다
     logging.basicConfig(level=logging.DEBUG if a.verbose else (logging.WARNING if quiet else logging.INFO),
                         format="%(asctime)s %(levelname)s %(message)s", stream=sys.stderr)
     try:
@@ -301,6 +310,9 @@ def _dispatch(a: argparse.Namespace) -> int:
         return print_doctor(doctor(_broker()))
     if a.cmd == "demo":
         return _demo(a.home)
+    if a.cmd == "update":
+        from .updater import run as run_update
+        return run_update(_broker(), check_only=a.check, to=a.to, stop_all=a.stop_all, restart=not a.no_restart)
 
     b = _broker()
     if a.cmd == "register":

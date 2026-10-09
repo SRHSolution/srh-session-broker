@@ -28,7 +28,7 @@ Claude Code 창과 Codex 창을 여러 개 띄워 일하면, 한 창에서 다�
 - **AI 라우터(선택)** — 대상을 생략하면 [TypeSafe](https://typesafe.ai) Jev 가 역할을 고릅니다. 키가 없어도 이름·역할·규칙으로 동작합니다.
 - **새 PC 준비** — `srhbroker setup claude|codex --apply` 로 연결하고, `srhbroker doctor` 로 점검하고, `srhbroker demo` 로 바로 체험합니다.
 
-> **English summary** — SRH Session Broker (`srhbroker`) lets Claude Code and OpenAI Codex CLI sessions delegate work and exchange messages **by name** (the name you gave each session with `/rename`). It ships an MCP server, a SQLite-backed task store with routing and safety gates (hardware-control requests are forced read-only; irreversible actions need human approval), instant delivery into the receiving terminal pane via [herdr](https://herdr.dev), a terminal dashboard, and a local web dashboard. An optional AI router (TypeSafe Jev) picks a role when no target is given. Install with `uv tool install "srh-session-broker[jev] @ git+https://github.com/SRHSolution/srh-session-broker"`, then run `srhbroker setup claude --apply`, `srhbroker setup codex --apply` and `srhbroker doctor`. Try it without any session using `srhbroker demo`. The docs below are in Korean; commands are identical. MIT licensed — made by [SRH Solutions](https://srhsol.com).
+> **English summary** — SRH Session Broker (`srhbroker`) lets Claude Code and OpenAI Codex CLI sessions delegate work and exchange messages **by name** (the name you gave each session with `/rename`). It ships an MCP server, a SQLite-backed task store with routing and safety gates (hardware-control requests are forced read-only; irreversible actions need human approval), instant delivery into the receiving terminal pane via [herdr](https://herdr.dev), a terminal dashboard, and a local web dashboard. An optional AI router (TypeSafe Jev) picks a role when no target is given. Install with `uv tool install "srh-session-broker[jev] @ git+https://github.com/SRHSolution/srh-session-broker"`, then run `srhbroker setup claude --apply`, `srhbroker setup codex --apply` and `srhbroker doctor`. Try it without any session using `srhbroker demo`, and update later with `srhbroker update`. The docs below are in Korean; commands are identical. MIT licensed — made by [SRH Solutions](https://srhsol.com).
 
 ## 화면
 
@@ -67,7 +67,7 @@ cd srh-session-broker
 uv tool install -e ".[jev]"
 ```
 
-`[jev]` 를 빼면 AI 라우터 없이 설치됩니다. 업데이트는 `uv tool upgrade srh-session-broker`.
+`[jev]` 를 빼면 AI 라우터 없이 설치됩니다. 설치한 뒤의 업데이트는 `srhbroker update` 로 합니다 ([업데이트](#업데이트)).
 
 - 시스템 Python 이 3.11 보다 낮아도 됩니다(예: macOS 기본 3.9). uv 가 맞는 Python 을 받아 따로 씁니다. uv 가 없으면 macOS 는 `brew install uv`, Windows 는 `winget install astral-sh.uv`.
 - 설치 끝에 "`~/.local/bin` is not on your PATH" 경고가 나오면 `uv tool update-shell` 을 실행하고 터미널을 새로 엽니다.
@@ -116,6 +116,21 @@ broker에 이 세션 등록해줘
 (Codex 창에서)   lead-claude 에 빌드 캐시 비웠다고 알려줘
 ```
 
+### 업데이트
+
+```powershell
+srhbroker update --check        # 새 버전이 있는지 (저장소의 vX.Y.Z 태그)
+srhbroker update                # 최신 태그로 올리기
+srhbroker update --to v0.3.0    # 특정 버전으로 (되돌리기 포함)
+```
+
+- 설치 방식을 알아서 고릅니다: `uv tool`·`pipx` 는 새 태그로 다시 설치하고, 소스 checkout(editable)은 `git pull --ff-only` 합니다.
+- 업데이트 뒤 새 버전에 필요한 설정(Codex 의 새 도구 자동 승인 등)을 적용하고, herdr 창에서 돌던 데몬을 그 창에서 새 코드로 다시 띄웁니다 (실행 중인 worker 작업이 있으면 건너뜀, `--no-restart` 로 끔).
+- 데몬이 몇 시간마다 새 버전을 확인해 `watch`·대시보드·`doctor` 에 "새 버전 vX — srhbroker update" 로 알립니다 (`[update] check = false` 로 끔, `repo` 로 포크 지정).
+- **Windows**: 실행 중인 srhbroker(데몬·대시보드·각 세션의 MCP 서버)가 설치 파일을 잠가, 그대로 바꾸면 설치가 깨집니다. `update` 는 이를 감지해 멈추고 무엇이 실행 중인지 보여 줍니다. `--stop-all` 을 주면 그 프로세스들을 끝내고, 설치는 이 명령이 끝난 뒤 별도 프로세스가 이어서 합니다 (기록: `~/.srhbroker/update.log`). 소스 checkout 은 실행 중에도 바로 됩니다.
+- 업데이트 뒤 열려 있던 Claude 창은 `/mcp` 에서 srhbroker 를 다시 연결하고, Codex 창은 다시 열어야 새 도구가 보입니다.
+- 0.4.0 이전 버전에는 `update` 명령이 없으므로 한 번만 `uv tool upgrade srh-session-broker` (pipx: `pipx upgrade srh-session-broker`) 로 올리세요.
+
 ### 세션 없이 체험만
 
 ```powershell
@@ -153,6 +168,7 @@ srhbroker demo        # 임시 폴더에 예시 세션·작업을 만들고, 보
 | `srhbroker discover` · `register --session <ID>` · `sessions` | 세션 찾기 · 등록 · 목록 |
 | `srhbroker rename <지금 이름> <새 이름>` | 등록 이름 바꾸기. 지워진 옛 이름을 주면 그 기록을 새 이름 세션이 이어받음 |
 | `srhbroker setup claude\|codex [--apply]` · `init` · `demo` | 연결 설정 · 초기화 · 예시 데이터 |
+| `srhbroker update [--check] [--to vX.Y.Z] [--stop-all]` · `--version` | git 배포(저장소 태그)로 업데이트 · 설치 버전 |
 
 ---
 
@@ -426,7 +442,7 @@ uv run pytest -q
 
 ## 변경 이력
 
-버전별 변경 내용은 [CHANGELOG.md](CHANGELOG.md) 에 있습니다. 설치한 버전은 `uv tool list` 로 보고, `uv tool upgrade srh-session-broker` 로 올립니다.
+버전별 변경 내용은 [CHANGELOG.md](CHANGELOG.md) 에 있습니다. 설치한 버전은 `srhbroker --version`, 새 버전 확인과 업데이트는 `srhbroker update --check` · `srhbroker update`.
 
 ## 라이선스
 

@@ -2,6 +2,13 @@
 
 버전은 [유의적 버전](https://semver.org/lang/ko/)을 따릅니다. 0.x 동안에는 기능이 늘면 두 번째 자리, 고치기만 하면 세 번째 자리를 올립니다.
 
+## 0.4.0 — 2026-10-10
+
+### 추가
+- **git 배포 업데이트** `srhbroker update [--check] [--to vX.Y.Z] [--stop-all] [--no-restart]`: 저장소의 vX.Y.Z 태그로 새 버전을 찾아 설치 방식(uv tool · pipx · pip · 소스 checkout)에 맞게 올립니다. 업데이트 뒤 Codex 새 도구 자동 승인을 적용하고, herdr 창의 데몬을 새 코드로 다시 띄웁니다.
+- **Windows 안전 장치**: 실행 중인 srhbroker 가 설치 파일을 잠가 재설치가 실패하며 설치가 반쯤 지워지는 문제(실측)를 막습니다. 업데이트할 설치의 프로세스만 골라(다른 설치·자기 자신 제외) 보여 주고 멈추며, `--stop-all` 이면 끝낸 뒤 설치를 별도 프로세스로 이어서 합니다(`update.log`).
+- **새 버전 알림**: 데몬이 주기적으로 확인(`[update] check_hours`, 기본 12시간)해 `watch`·웹 대시보드·`doctor` 에 표시. `srhbroker --version`.
+
 ## 0.3.0 — 2026-10-10
 
 ### 추가

@@ -84,6 +84,9 @@ def render(snap: dict[str, Any], flow_filter: str | None = None, cols: int = 120
             eng += " · " + col("재시작 필요", "yellow", "bold")
     st = snap["stats"]
     f24 = st["flows_24h"]
+    up = snap.get("update") or {}
+    if up.get("available"):
+        eng += " · " + col(f"새 버전 {up['latest']} — srhbroker update", "yellow")
     out.append(col(" SRH Broker ", "bold") + f" {datetime.now():%H:%M:%S}  {eng}")
     out.append(col(f" 24시간: 중계 {f24['broker']} · Claude 직접 {f24['claude-native']} · Codex 직접 {f24['herdr-direct']}"
                    + (f" · 전달 중앙값 {st['median_delivery_s_24h']}초" if st["median_delivery_s_24h"] is not None else ""),

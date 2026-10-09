@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "srh-session-broker"
-version = "0.3.0"
+version = "0.4.0"
 description = "Claude Code ↔ Codex 세션 간 작업 위임·메시지 브로커 (MCP 서버 + herdr 즉시 전달 + 대시보드)"
 readme = "README.md"
 requires-python = ">=3.11"

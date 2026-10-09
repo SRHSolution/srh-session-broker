@@ -52,6 +52,13 @@ _OPEN_STORES: list[Store] = []
 
 
 @pytest.fixture(autouse=True)
+def _no_update_network(monkeypatch):
+    """새 버전 확인이 테스트 중에 GitHub 에 접속하지 않게 한다."""
+    from srhbroker import updater
+    monkeypatch.setattr(updater, "remote_versions", lambda repo, timeout=10.0: ["v0.2.0", "v0.2.1", "v0.3.0"])
+
+
+@pytest.fixture(autouse=True)
 def _close_stores():
     """테스트가 만든 SQLite 연결을 닫는다 (ResourceWarning 방지)."""
     yield

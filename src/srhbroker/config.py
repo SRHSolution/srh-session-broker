@@ -91,6 +91,12 @@ DEFAULTS: dict[str, Any] = {
         },
     },
     # herdr 창 안에서 실행 중이면, 받는 세션이 쉬고 있을 때 받은 메시지를 프롬프트로 바로 넣는다
+    # git 배포 업데이트: 저장소의 vX.Y.Z 태그로 새 버전을 확인한다 (srhbroker update)
+    "update": {
+        "repo": "https://github.com/SRHSolution/srh-session-broker",
+        "check": True,          # 데몬·doctor 가 새 버전을 확인해 watch·대시보드에 알린다
+        "check_hours": 12,      # 확인 간격 (그 사이에는 캐시만 읽음)
+    },
     # 관찰 기록(flow_log)·대시보드
     "monitor": {
         "store_body_chars": 2000,  # Claude 직접 메시지 관찰 기록에 남길 본문 길이 (0 이면 본문을 남기지 않음)

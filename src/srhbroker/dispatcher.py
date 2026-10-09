@@ -178,6 +178,9 @@ class Dispatcher:
                         log.info("대기 기한 초과로 만료: %s", expired)
                 if n % 5 == 0:
                     self.write_state(started)
+                if n % 600 == 0:  # 약 10분마다: 새 버전 확인 (네트워크는 check_hours 마다, 그 사이는 캐시)
+                    from .updater import background_check
+                    asyncio.get_running_loop().run_in_executor(None, background_check, self.broker)
                 n += 1
             except Exception:
                 log.exception("tick 오류")
