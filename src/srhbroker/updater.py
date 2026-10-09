@@ -315,6 +315,7 @@ def restart_daemon(b: Any, out: Callable[[str], None]) -> None:
         out(f"! 실행 중인 worker 작업이 있어 데몬을 재시작하지 않았습니다 — 끝난 뒤 창 {pane} 에서 다시 띄우세요")
         return
     herdr = b.herdr.binary()
+    old_pid = d.get("pid")
     subprocess.run([herdr, "pane", "send-keys", pane, "ctrl+c"], capture_output=True)
     for _ in range(20):
         lock = SingleInstance(b.cfg.home / "daemon.lock")
@@ -322,9 +323,17 @@ def restart_daemon(b: Any, out: Callable[[str], None]) -> None:
             lock.release()
             break
         time.sleep(0.5)
-    r = subprocess.run([herdr, "pane", "run", pane, "srhbroker daemon"], capture_output=True)
-    out(f"✔ 데몬을 창 {pane} 에서 새 코드로 다시 띄웠습니다" if r.returncode == 0
-        else f"! 데몬 재시작 실패 — 창 {pane} 에서 srhbroker daemon")
+    # 잠금이 풀린 직후에는 셸이 아직 프롬프트로 돌아오지 않아 입력이 사라질 수 있다(실측) — 기다렸다 넣고, 떴는지 확인한다
+    for attempt in range(2):
+        time.sleep(2.0 + attempt * 2)
+        subprocess.run([herdr, "pane", "run", pane, "srhbroker daemon"], capture_output=True)
+        for _ in range(16):
+            time.sleep(0.5)
+            now = daemon_state(b.cfg.home)
+            if now.get("running") and now.get("pid") and now.get("pid") != old_pid:
+                out(f"✔ 데몬을 창 {pane} 에서 새 코드로 다시 띄웠습니다 (pid {now['pid']})")
+                return
+    out(f"! 데몬을 다시 띄우지 못했습니다 — 창 {pane} 에서 srhbroker daemon 을 실행하세요")
 
 
 def repo_for(b: Any) -> str:
