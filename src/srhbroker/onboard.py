@@ -28,9 +28,11 @@ CODEX_ENV_VARS = ["SRHBROKER_SELF", "SRHBROKER_TASK", "SRHBROKER_HOME", "TYPESAF
 
 
 def exe_command() -> str:
-    """hook·MCP 설정에 쓸 srhbroker 실행 명령. PATH 에 있으면 이름만, 없으면 지금 실행 중인 실행 파일의 절대 경로."""
-    if shutil.which("srhbroker"):
-        return "srhbroker"
+    """hook·MCP 설정에 쓸 srhbroker 실행 파일의 절대 경로.
+    Claude·Codex 가 GUI·다른 셸에서 실행되면 PATH 가 달라 이름만으로는 못 찾을 수 있어 항상 절대 경로를 쓴다."""
+    found = shutil.which("srhbroker")
+    if found:
+        return str(Path(found))
     scripts = Path(sys.executable).parent
     for cand in (scripts / "srhbroker.exe", scripts / "srhbroker", scripts / "Scripts" / "srhbroker.exe"):
         if cand.exists():
@@ -91,7 +93,8 @@ def apply_claude(run: Callable[[list[str]], int] | None = None) -> list[str]:
     path = native.claude_home() / "settings.json"
     settings = _read_json(path)
     hooks = settings.setdefault("hooks", {})
-    q = f'"{exe}"' if " " in exe else exe       # Claude Code 는 hook 을 셸(bash)로 실행 — 공백 경로만 따옴표
+    # Claude Code 는 hook 을 셸(bash, Windows 도 Git Bash)로 실행한다 — 공백·역슬래시가 있으면 따옴표로 감싼다
+    q = f'"{exe}"' if (" " in exe or "\\" in exe) else exe
     changed = False
     if not any("hook claude-stop" in c for c in _hook_cmds(settings, "Stop")):
         hooks.setdefault("Stop", []).append({"hooks": [{"type": "command", "command": f"{q} hook claude-stop"}]})
@@ -125,8 +128,6 @@ def apply_codex() -> list[str]:
             out.append(f"주의: env_vars 에 빠진 변수 {missing} — 직접 추가하세요 (Codex 는 환경 변수를 넘기지 않음)")
         return out
     exe = exe_command()
-    if exe != "srhbroker":
-        exe = str(Path(exe).resolve())
     block = ["", "# srhbroker — Claude ↔ Codex 세션 브로커 (srhbroker setup codex --apply 로 추가)",
              "[mcp_servers.srhbroker]", f"command = '{exe}'", 'args = ["mcp"]',
              "env_vars = [" + ", ".join(f'"{v}"' for v in CODEX_ENV_VARS) + "]",

@@ -28,10 +28,12 @@ def test_apply_claude_adds_hooks_once_and_keeps_existing(homes, monkeypatch):
     calls: list[list[str]] = []
     monkeypatch.setattr(onboard.shutil, "which", lambda n: f"/bin/{n}" if n in ("claude", "srhbroker") else None)
     out = onboard.apply_claude(run=lambda cmd: calls.append(cmd) or 0)
-    assert calls == [["claude", "mcp", "add", "--scope", "user", "srhbroker", "--", "srhbroker", "mcp"]]
+    exe = str(onboard.Path("/bin/srhbroker"))                       # PATH 에 있어도 절대 경로로 쓴다
+    assert calls == [["claude", "mcp", "add", "--scope", "user", "srhbroker", "--", exe, "mcp"]]
     st = json.loads((ch / "settings.json").read_text(encoding="utf-8"))
     stop = [h["command"] for g in st["hooks"]["Stop"] for h in g["hooks"]]
-    assert stop == ["other-tool stop", "srhbroker hook claude-stop"] and st["theme"] == "dark"
+    hook = f'"{exe}" hook claude-stop' if "\\" in exe else f"{exe} hook claude-stop"   # Windows 경로는 따옴표(bash)
+    assert stop == ["other-tool stop", hook] and st["theme"] == "dark"
     assert st["hooks"]["PostToolUse"][0]["matcher"] == "SendMessage"
     assert list(ch.glob("settings.json.bak-*")) and any("저장" in x for x in out)
     # 두 번째 적용: 바뀌는 것 없음 (MCP 는 ~/.claude.json 에 등록된 것으로 본다)

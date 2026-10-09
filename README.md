@@ -69,6 +69,9 @@ uv tool install -e ".[jev]"
 
 `[jev]` 를 빼면 AI 라우터 없이 설치됩니다. 업데이트는 `uv tool upgrade srh-session-broker`.
 
+- 시스템 Python 이 3.11 보다 낮아도 됩니다(예: macOS 기본 3.9). uv 가 맞는 Python 을 받아 따로 씁니다. uv 가 없으면 macOS 는 `brew install uv`, Windows 는 `winget install astral-sh.uv`.
+- 설치 끝에 "`~/.local/bin` is not on your PATH" 경고가 나오면 `uv tool update-shell` 을 실행하고 터미널을 새로 엽니다.
+
 ### 2) 초기화와 연결
 
 ```powershell
