@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SRH Broker 교환대</title>
+<style>
+:root {
+  --bg: #EEF1F4; --panel: #FFFFFF; --ink: #1C2430; --muted: #5E6B7A; --line: #D5DCE4; --hover: #F4F6F9;
+  --claude: #5B5BD6; --claude-soft: #E7E7FB; --codex: #0F8F84; --codex-soft: #DDF2EF;
+  --wait: #B7791F; --wait-soft: #FBF0DC; --bad: #B42339; --bad-soft: #F9E0E4; --ok: #2F7D4F; --mark: #FFE58A;
+  --radius-lg: 12px; --radius-sm: 6px; --top: 64px;
+  --font: "Pretendard", "Pretendard Variable", "Malgun Gothic", "Apple SD Gothic Neo", system-ui, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #172033; --panel: #1E2A40; --ink: #E6EAF0; --muted: #9AA7B8; --line: #2E3C55; --hover: #24324B;
+    --claude: #9D9DF5; --claude-soft: #2A2E5A; --codex: #4CC7BA; --codex-soft: #173F45;
+    --wait: #E3B055; --wait-soft: #3E3420; --bad: #F2798C; --bad-soft: #4A2330; --ok: #6FCF97; --mark: #6B5A16; }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 var(--font); font-variant-numeric: tabular-nums; }
+button, input, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--claude); outline-offset: 2px; }
+mark { background: var(--mark); color: inherit; border-radius: 2px; padding: 0 1px; }
+h2 { font-size: 14px; margin: 0; font-weight: 800; }
+.muted { color: var(--muted); }
+
+/* ── 머리: 이름 · 엔진 상태 · 검색 ───────────────────────────────── */
+.top { position: sticky; top: 0; z-index: 5; display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 16px; align-items: center; padding: 12px 20px; background: var(--bg); border-bottom: 1px solid var(--line); min-height: var(--top); }
+.top h1 { margin: 0; font-size: 19px; font-weight: 800; letter-spacing: -0.02em; white-space: nowrap; }
+#engine { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#engine b { color: var(--ink); font-weight: 600; }
+#engine .bad { color: var(--bad); font-weight: 700; }
+.search { position: relative; flex: 1 1 320px; min-width: 0; }
+.search input { width: 100%; padding: 8px 34px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); }
+.search svg { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); width: 15px; height: 15px; color: var(--muted); }
+.search kbd { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); font: 12px var(--font); color: var(--muted);
+  border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; }
+#clock { color: var(--muted); font-size: 12px; white-space: nowrap; }
+
+/* ── 사람이 처리할 것: 있을 때만 가로 띠 ─────────────────────────── */
+.attention { padding: 12px 20px 0; }
+.attention h2 { margin-bottom: 8px; }
+.attention ul { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 8px; }
+.attention li { background: var(--panel); border-left: 4px solid var(--wait); border-radius: var(--radius-sm); padding: 9px 12px; min-width: 0; }
+.attention li.failed, .attention li.engine, .attention li.mismatch { border-left-color: var(--bad); }
+.attention .kind { font-size: 12px; font-weight: 700; color: var(--wait); }
+.attention li.failed .kind, .attention li.engine .kind, .attention li.mismatch .kind { color: var(--bad); }
+.attention .t { font-weight: 600; overflow-wrap: anywhere; }
+.attention .d { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; align-items: center; }
+
+/* ── 3단: 세션 · 흐름 · 상세 ─────────────────────────────────────── */
+.shell { display: grid; grid-template-columns: 290px minmax(0, 1fr) minmax(380px, 480px); gap: 14px; padding: 14px 20px 20px; align-items: start; }
+.pane { background: var(--panel); border-radius: var(--radius-lg); min-width: 0; }
+.sessions, .detail { position: sticky; top: calc(var(--top) + 14px); max-height: calc(100vh - var(--top) - 34px); overflow: auto; }
+.pane-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; padding: 12px 14px 8px; }
+
+/* 세션 교환대 (좁은 세로판) */
+.proj { padding: 8px 14px 12px; border-top: 1px solid var(--line); }
+.proj-name { font-size: 12px; color: var(--muted); margin-bottom: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node { display: flex; align-items: center; gap: 8px; width: 100%; padding: 5px 10px; margin: 3px 0; border-radius: 999px;
+  border: 2px solid transparent; background: transparent; cursor: pointer; text-align: left; }
+.node.claude { background: var(--claude-soft); border-color: var(--claude); }
+.node.codex { background: var(--codex-soft); border-color: var(--codex); }
+.node.closed { background: transparent; border-style: dashed; opacity: .75; }
+.node.mismatch { border-color: var(--bad); }
+.node[aria-pressed="true"] { box-shadow: 0 0 0 3px color-mix(in srgb, var(--ink) 25%, transparent); }
+.node .name { font-weight: 700; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node .st { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.node .q { font-size: 12px; font-weight: 700; color: var(--wait); white-space: nowrap; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.working { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 30%, transparent); }
+.dot.idle, .dot.done { background: var(--ok); } .dot.blocked { background: var(--wait); }
+.dot.closed { background: transparent; border: 2px solid var(--muted); }
+.channel { font-size: 12px; color: var(--muted); padding: 2px 10px; }
+.channel b { color: var(--ink); } .channel .pend { color: var(--wait); font-weight: 700; }
+.stats { padding: 10px 14px 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+
+/* 흐름 */
+/* 검색 + 필터: 목록을 내려도 위에 붙어 있게 */
+.filters { position: sticky; top: var(--top); z-index: 3; display: flex; flex-direction: column; gap: 8px; padding: 10px 14px;
+  background: var(--panel); border-bottom: 1px solid var(--line); }
+.frow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.btn.reset { padding: 2px 10px; font-size: 12px; color: var(--muted); }
+.chips { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+.chip { border: 1px solid var(--line); background: transparent; color: var(--muted); border-radius: 999px; padding: 3px 11px; cursor: pointer; font-size: 13px; }
+.chip[aria-pressed="true"] { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+.filters select { border: 1px solid var(--line); background: var(--panel); border-radius: var(--radius-sm); padding: 3px 6px; font-size: 13px; max-width: 200px; }
+.filters label.tog { display: inline-flex; gap: 5px; align-items: center; font-size: 13px; color: var(--muted); cursor: pointer; }
+.filters .count { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.rows { list-style: none; margin: 0; padding: 0; }
+.row { display: grid; grid-template-columns: 74px 92px minmax(0, 1fr) auto; column-gap: 12px; padding: 10px 14px;
+  border-top: 1px solid var(--line); cursor: pointer; }
+.row:first-child { border-top: 0; }
+.row:hover { background: var(--hover); }
+.row[aria-selected="true"] { background: color-mix(in srgb, var(--claude) 12%, var(--panel)); box-shadow: inset 3px 0 0 var(--claude); }
+.row .when { color: var(--muted); font-size: 12px; padding-top: 2px; }
+.row .tr { font-size: 12px; font-weight: 700; padding-top: 2px; }
+.tr.broker { color: var(--wait); } .tr.claude-native { color: var(--claude); } .tr.herdr-direct { color: var(--codex); }
+.row .who { font-weight: 600; overflow-wrap: anywhere; }
+.row .who .arrow { color: var(--muted); font-weight: 400; margin: 0 4px; }
+.row .mate { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0 6px; margin-left: 6px; font-weight: 500; }
+.row .stat { font-size: 12px; white-space: nowrap; padding-top: 2px; }
+.row .sum { grid-column: 3 / 5; font-weight: 600; margin-top: 2px; overflow-wrap: anywhere; }
+.row .ex { grid-column: 3 / 5; color: var(--muted); font-size: 13px; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.s-done, .s-sent { color: var(--ok); } .s-failed, .s-timeout, .s-expired, .s-not_delivered { color: var(--bad); }
+.s-queued, .s-held, .s-needs_routing { color: var(--wait); } .s-cancelled, .s-dropped { color: var(--muted); }
+.s-delivered, .s-running { color: var(--codex); }
+.more { display: block; width: 100%; padding: 10px; border: 0; border-top: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer; }
+.more:hover { background: var(--hover); }
+.empty { color: var(--muted); padding: 18px 14px; list-style: none; }
+
+/* 상세 */
+.detail { padding: 14px 16px 18px; }
+.detail .placeholder { color: var(--muted); padding: 30px 6px; }
+.detail h3 { margin: 4px 0 8px; font-size: 17px; line-height: 1.4; overflow-wrap: anywhere; }
+.detail h4 { margin: 18px 0 6px; font-size: 13px; }
+.detail .meta { color: var(--muted); font-size: 12px; }
+.detail pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg); padding: 10px 12px; border-radius: var(--radius-sm);
+  font: 13px/1.6 var(--font); margin: 0; }
+.detail .note { font-size: 12px; color: var(--muted); background: var(--hover); border-radius: var(--radius-sm); padding: 8px 10px; margin-top: 10px; }
+.detail .close { display: none; }
+.parties { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0 8px; }
+.who-chip { padding: 2px 10px; border-radius: 999px; font-weight: 600; font-size: 13px; }
+.who-chip.claude { background: var(--claude-soft); color: var(--claude); }
+.who-chip.codex { background: var(--codex-soft); color: var(--codex); }
+.who-chip.other { background: var(--bg); color: var(--muted); }
+.tl { list-style: none; margin: 4px 0 0 4px; padding: 0; border-left: 2px solid var(--line); }
+.tl li { position: relative; padding: 0 0 11px 16px; }
+.tl li:last-child { padding-bottom: 2px; }
+.tl li::before { content: ""; position: absolute; left: -7px; top: 5px; width: 12px; height: 12px; border-radius: 50%;
+  background: var(--panel); border: 2px solid var(--claude); }
+.tl li.ok::before { border-color: var(--ok); background: var(--ok); }
+.tl li.wait::before { border-color: var(--wait); }
+.tl li.bad::before { border-color: var(--bad); background: var(--bad); }
+.tl .when { font-size: 12px; color: var(--muted); }
+.tl .step { font-weight: 700; margin-right: 6px; }
+.tl .txt { overflow-wrap: anywhere; }
+.bar { display: grid; grid-template-columns: 90px 1fr 46px; gap: 8px; align-items: center; font-size: 13px; }
+.bar i { display: block; height: 8px; border-radius: 4px; background: var(--claude); }
+details.raw summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-top: 16px; }
+
+.btn { border: 1px solid var(--line); background: transparent; border-radius: var(--radius-sm); padding: 4px 10px; cursor: pointer; font-size: 13px; }
+.btn:hover { border-color: var(--ink); }
+.btn.primary { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+.btn.arm { background: var(--bad); border-color: var(--bad); color: #fff; }
+.route-in { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 3px 8px; font-size: 13px; background: var(--panel); width: 150px; }
+#toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--panel);
+  padding: 8px 16px; border-radius: 999px; font-size: 14px; display: none; z-index: 30; }
+
+/* 중간 폭: 상세는 오른쪽에서 덮는 창 */
+@media (max-width: 1279px) {
+  .shell { grid-template-columns: 260px minmax(0, 1fr); }
+  .detail { position: fixed; inset: 0 0 0 auto; width: min(520px, 100%); max-height: none; top: 0; border-radius: 0; z-index: 20;
+    box-shadow: -1px 0 0 var(--line), -24px 0 48px rgb(0 0 0 / .2); transform: translateX(105%); transition: transform .18s ease-out; }
+  .detail.open { transform: none; }
+  .detail .close { display: inline-block; margin-bottom: 8px; }
+}
+/* 좁은 폭: 한 단, 세션은 위로 */
+@media (max-width: 860px) {
+  .top { grid-template-columns: 1fr auto; } #engine { grid-column: 1 / -1; white-space: normal; }
+  .shell { grid-template-columns: 1fr; padding: 12px 16px; }
+  .sessions { position: static; max-height: none; }
+  .row { grid-template-columns: 64px minmax(0, 1fr) auto; } .row .tr { grid-column: 2; grid-row: 2; }
+  .row .who { grid-column: 2; grid-row: 1; } .row .sum, .row .ex { grid-column: 1 / -1; }
+  .attention, .filters { padding-left: 16px; padding-right: 16px; }
+}
+@media (prefers-reduced-motion: reduce) { .detail { transition: none; } }
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>SRH Broker 교환대</h1>
+  <div id="engine">불러오는 중…</div>
+  <div id="clock"></div>
+</header>
+
+<section class="attention" id="attention" hidden>
+  <h2 id="att-title">사람이 처리할 것</h2>
+  <ul id="todo"></ul>
+</section>
+
+<div class="shell">
+  <aside class="pane sessions" aria-label="세션 교환대">
+    <div class="pane-head"><h2>세션</h2><span class="muted" style="font-size:12px">누르면 그 세션의 흐름만 봅니다</span></div>
+    <div id="lanes"></div>
+    <div class="stats" id="stats"></div>
+  </aside>
+
+  <main class="pane" aria-label="흐름">
+    <div class="pane-head"><h2>흐름</h2><span class="muted" style="font-size:12px">Claude ↔ Codex 중계와 같은 provider 직접 전달</span></div>
+    <div class="filters">
+      <div class="frow">
+        <label class="search" aria-label="흐름 검색">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="8.5" cy="8.5" r="6"/><path d="m13 13 5 5"/></svg>
+          <input id="q" type="search" placeholder="보낸 쪽·받는 쪽·제목·본문·결과·ID 검색" autocomplete="off">
+          <kbd>/</kbd>
+        </label>
+        <span class="count" id="count"></span>
+      </div>
+      <div class="frow">
+      <div class="chips" role="group" aria-label="경로">
+        <button class="chip" data-kind="" aria-pressed="true">전체</button>
+        <button class="chip" data-kind="broker" aria-pressed="false">Claude ↔ Codex 중계</button>
+        <button class="chip" data-kind="claude-native" aria-pressed="false">Claude 끼리</button>
+        <button class="chip" data-kind="herdr-direct" aria-pressed="false">Codex 끼리</button>
+      </div>
+      <select id="f-status" aria-label="상태">
+        <option value="">모든 상태</option><option value="active">진행 중</option><option value="done">완료</option>
+        <option value="failed">실패·만료</option><option value="cancelled">취소·소멸</option>
+      </select>
+      <select id="f-since" aria-label="기간">
+        <option value="24">최근 24시간</option><option value="168">최근 7일</option><option value="">전체 기간</option>
+      </select>
+      <select id="f-session" aria-label="세션"><option value="">모든 세션</option></select>
+      <label class="tog"><input type="checkbox" id="f-mates"> 세션 안 팀원 메시지</label>
+      <button class="btn reset" id="reset" hidden>필터 초기화</button>
+      </div>
+    </div>
+    <ul class="rows" id="rows" role="listbox" aria-label="흐름 목록"></ul>
+    <button class="more" id="more" hidden>더 보기</button>
+  </main>
+
+  <aside class="pane detail" id="detail" aria-label="상세">
+    <button class="btn close" id="close">닫기</button>
+    <div id="detail-body"><p class="placeholder">흐름에서 항목을 고르면 여기에 중계 경과와 전체 내용이 나옵니다.</p></div>
+  </aside>
+</div>
+<div id="toast" role="status"></div>
+
+<script>
+"use strict";
+const params = new URLSearchParams(location.search);
+let TOKEN = params.get("t") || sessionStorage.getItem("srhb-token") || "";
+if (params.get("t")) { sessionStorage.setItem("srhb-token", TOKEN); history.replaceState(null, "", location.pathname); }
+
+const store = { get(k, d) { try { return JSON.parse(localStorage.getItem("srhb-" + k)) ?? d; } catch { return d; } },
+                set(k, v) { try { localStorage.setItem("srhb-" + k, JSON.stringify(v)); } catch {} } };
+const F = Object.assign({ q: "", kind: "", status: "", since: "24", session: "", mates: false }, store.get("filters", {}));
+let snap = null, flows = [], limit = 100, selected = null, armed = null, typing = null;
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const hl = s => { const t = esc(s); if (!F.q.trim()) return t;
+  const q = esc(F.q.trim()).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); return t.replace(new RegExp(q, "gi"), m => `<mark>${m}</mark>`); };
+const ago = iso => { if (!iso) return "-"; const s = Math.max(0, (Date.now() - new Date(iso)) / 1000);
+  return s < 60 ? `${s|0}초 전` : s < 3600 ? `${s/60|0}분 전` : s < 172800 ? `${s/3600|0}시간 전` : `${s/86400|0}일 전`; };
+const p2 = n => String(n).padStart(2, "0");
+const clock = iso => { if (!iso) return ""; const d = new Date(iso); return `${d.getMonth()+1}/${d.getDate()} ${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`; };
+const after = sec => sec == null ? "" : sec < 60 ? `+${sec}초` : sec < 3600 ? `+${Math.round(sec/60)}분` : `+${(sec/3600).toFixed(1)}시간`;
+const STATUS = {queued:"대기", held:"승인 대기", needs_routing:"대상 미정", delivered:"전달됨", running:"실행 중", done:"완료",
+  failed:"실패", timeout:"만료", expired:"만료", cancelled:"취소", dropped:"소멸", sent:"보냄", not_delivered:"전달 못 함"};
+const KIND = {approve:"승인 대기", route:"대상 미정", "closed-pane":"창 닫힘", failed:"실패", mismatch:"창 짝 불일치", engine:"엔진"};
+const TR = {broker:"중계", "claude-native":"Claude 직접", "herdr-direct":"Codex 직접"};
+
+async function api(path, body) {
+  const r = await fetch(path, body ? {method:"POST", headers:{"X-Token":TOKEN,"Content-Type":"application/json"}, body: JSON.stringify(body)}
+                                   : {headers:{"X-Token":TOKEN}});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+  return j;
+}
+function toast(msg) { const t = $("toast"); t.textContent = msg; t.style.display = "block"; clearTimeout(toast.h); toast.h = setTimeout(() => t.style.display = "none", 3500); }
+
+/* ── 엔진·처리할 것·세션 (스냅샷) ── */
+function engineLine(d) {
+  if (!d.running) return `<span class="bad">데몬이 꺼져 있습니다.</span> herdr 창에서 <b>srhbroker daemon</b> 을 띄우세요.`;
+  if (d.legacy) return `데몬이 <span class="bad">이전 버전</span>입니다. 재시작하세요.`;
+  let s = `데몬 <b>실행 중</b> · 신호 ${ago(new Date(d.heartbeat * 1000).toISOString())}`;
+  s += d.herdr ? ` · 창 <b>${esc(d.herdr_pane)}</b>에서 바로 전달` : ` · <span class="bad">herdr 창 밖이라 바로 전달 불가</span>`;
+  if (d.restart_needed) s += ` · <span class="bad">코드가 바뀌어 재시작 필요</span>`;
+  return s;
+}
+function renderAttention() {
+  const items = snap.attention;
+  $("attention").hidden = !items.length;
+  $("att-title").textContent = `사람이 처리할 것 ${items.length}건`;
+  $("todo").innerHTML = items.map(a => {
+    const who = a.from ? `${esc(a.from)} → ${esc(a.to || "?")}` : esc(a.session || "");
+    let acts = "";
+    if (a.task_id) {
+      const id = esc(a.task_id);
+      acts = `<button class="btn" data-open="${id}">내용 보기</button>`;
+      if (a.kind === "approve") acts += `<button class="btn primary" data-act="approve" data-id="${id}">승인</button>`;
+      if (a.kind === "route") acts += `<input class="route-in" data-route-in="${id}" placeholder="보낼 세션·역할" aria-label="보낼 대상"><button class="btn primary" data-act="route" data-id="${id}">보내기</button>`;
+      if (a.kind === "approve" || a.kind === "route") acts += `<button class="btn" data-act="cancel" data-id="${id}">취소</button>`;
+      acts = `<div class="acts">${acts}</div>`;
+    }
+    return `<li class="${esc(a.kind)}"><div class="kind">${esc(KIND[a.kind] || a.kind)}${a.age_s != null ? " · " + ago(new Date(Date.now() - a.age_s*1000).toISOString()) : ""}</div>` +
+      `<div class="t">${esc(a.title)}</div><div class="d">${who}${a.detail ? " — " + esc(a.detail) : ""}</div>${acts}</li>`;
+  }).join("");
+}
+function node(s) {
+  const st = s.pane_state === "open" ? s.agent_status : {closed:"창 닫힘", mismatch:"짝 불일치", unknown:"?", worker:"worker"}[s.pane_state];
+  const dot = s.pane_state === "open" ? s.agent_status : "closed";
+  const badge = [s.queued ? `받을 것 ${s.queued}` : "", s.held ? `승인 대기 ${s.held}` : ""].filter(Boolean).join(" · ");
+  return `<button class="node ${esc(s.provider)} ${s.pane_state === "closed" ? "closed" : ""} ${s.pane_state === "mismatch" ? "mismatch" : ""}"` +
+    ` data-session="${esc(s.name)}" aria-pressed="${F.session === s.name}" title="${esc(s.cwd || "")}">` +
+    `<i class="dot ${esc(dot)}"></i><span class="name">${esc(s.name)}</span>` +
+    (badge ? `<span class="q">${badge}</span>` : `<span class="st">${esc(st || "")}</span>`) + `</button>`;
+}
+function renderSessions() {
+  const groups = new Map();
+  for (const s of snap.sessions) {
+    const key = (s.cwd || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "(폴더 모름)";
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(s);
+  }
+  const day = Date.now() - 864e5;
+  const recent = snap.flows.filter(f => new Date(f.at) >= day && f.transport === "broker");
+  let html = "";
+  for (const [proj, ss] of groups) {
+    const names = new Set(ss.map(s => s.name));
+    const b = recent.filter(f => names.has(f.from) || names.has(f.to));
+    const toX = b.filter(f => ss.find(s => s.name === f.from)?.provider === "claude").length;
+    const pend = ss.reduce((n, s) => n + s.queued + s.held + s.needs_routing, 0);
+    html += `<div class="proj"><div class="proj-name" title="${esc(proj)}">${esc(proj)}</div>` +
+      ss.filter(s => s.provider === "claude").map(node).join("") +
+      `<div class="channel">${b.length ? `24시간 중계 <b>→ ${toX}</b> · <b>← ${b.length - toX}</b>` : "24시간 중계 없음"}${pend ? ` · <span class="pend">대기 ${pend}</span>` : ""}</div>` +
+      ss.filter(s => s.provider === "codex").map(node).join("") + `</div>`;
+  }
+  $("lanes").innerHTML = html || `<p class="empty">등록된 세션이 없습니다. srhbroker register --session &lt;세션ID&gt; 로 등록하세요.</p>`;
+  const s = snap.stats, f = s.flows_24h;
+  $("stats").innerHTML = `최근 24시간: 중계 ${f.broker} · Claude 끼리 ${f["claude-native"]} · Codex 끼리 ${f["herdr-direct"]}` +
+    (s.teammate_msgs_24h ? ` · 세션 안 팀원 메시지 ${s.teammate_msgs_24h}` : "") +
+    (s.median_delivery_s_24h != null ? `<br>받는 쪽에 들어가기까지 중앙값 ${s.median_delivery_s_24h}초` : "");
+  const sel = $("f-session");
+  sel.innerHTML = `<option value="">모든 세션</option>` + snap.sessions.map(x => `<option value="${esc(x.name)}">${esc(x.name)}</option>`).join("");
+  sel.value = F.session;
+}
+
+/* ── 흐름 (서버 검색) ── */
+function filterQuery() {
+  const p = new URLSearchParams({ limit: String(limit) });
+  if (F.q.trim()) p.set("q", F.q.trim());
+  if (F.kind) p.set("kind", F.kind);
+  if (F.status) p.set("status", F.status);
+  if (F.since) p.set("since", F.since);
+  if (F.session) p.set("session", F.session);
+  if (F.mates) p.set("teammates", "1");
+  return p.toString();
+}
+function renderFlows() {
+  $("rows").innerHTML = flows.length ? flows.map(f =>
+    `<li class="row" role="option" tabindex="0" data-open="${esc(f.id)}" aria-selected="${f.id === selected}">` +
+    `<span class="when" title="${esc(clock(f.at))}">${ago(f.at)}</span><span class="tr ${esc(f.transport)}">${esc(TR[f.transport] || f.transport)}</span>` +
+    `<span class="who">${hl(f.from)}<span class="arrow">→</span>${hl(f.to || "?")}${f.teammate ? `<span class="mate">팀원</span>` : ""}</span>` +
+    `<span class="stat s-${esc(f.status)}">${esc(STATUS[f.status] || f.status)}</span>` +
+    `<span class="sum">${hl(f.summary || "")}</span>` +
+    (f.excerpt && f.excerpt !== f.summary ? `<span class="ex">${hl(f.excerpt)}</span>` : "") + `</li>`).join("")
+    : `<li class="empty">${F.q ? `“${esc(F.q)}” 에 맞는 흐름이 없습니다. 검색어나 기간을 바꿔 보세요.` : "이 조건의 흐름이 없습니다. 기간을 늘리거나 필터를 풀어 보세요."}</li>`;
+  $("count").textContent = flows.length >= limit ? `${flows.length}건 이상` : `${flows.length}건`;
+  $("more").hidden = flows.length < limit;
+}
+let lastFlows = "";
+async function loadFlows() {
+  try {
+    const got = (await api(`/api/flows?${filterQuery()}`)).flows, key = JSON.stringify(got) + selected;
+    if (key === lastFlows) return;          // 바뀐 것이 없으면 다시 그리지 않는다 (포커스·스크롤 유지)
+    lastFlows = key; flows = got; renderFlows();
+  }
+  catch (err) { $("rows").innerHTML = `<li class="empty">흐름을 불러오지 못했습니다: ${esc(err.message)}</li>`; }
+}
+async function refresh() {
+  if (document.hidden || armed || typing) return;
+  try {
+    snap = await api("/api/snapshot");
+    $("engine").innerHTML = engineLine(snap.daemon);
+    $("clock").textContent = `${new Date().toLocaleTimeString("ko-KR")} 갱신`;
+    renderAttention(); renderSessions();
+  } catch (err) { $("engine").innerHTML = `<span class="bad">불러오지 못했습니다: ${esc(err.message)}</span> — srhbroker dashboard 가 실행 중인지, 출력된 주소로 열었는지 확인하세요.`; return; }
+  await loadFlows();
+}
+const DEFAULTS = { q: "", kind: "", status: "", since: "24", session: "", mates: false };
+function setFilter(patch) { Object.assign(F, patch); store.set("filters", F); limit = 100; syncControls(); loadFlows(); }
+function syncControls() {
+  document.querySelectorAll(".chip").forEach(c => c.setAttribute("aria-pressed", String(c.dataset.kind === F.kind)));
+  $("f-status").value = F.status; $("f-since").value = F.since; $("f-session").value = F.session; $("f-mates").checked = F.mates;
+  if ($("q").value !== F.q) $("q").value = F.q;
+  document.querySelectorAll(".node").forEach(n => n.setAttribute("aria-pressed", String(n.dataset.session === F.session)));
+  $("reset").hidden = Object.keys(DEFAULTS).every(k => F[k] === DEFAULTS[k]);
+}
+
+/* ── 상세 ── */
+async function openDetail(id) {
+  selected = id; renderFlows();
+  const box = $("detail-body");
+  try {
+    const t = await api(`/api/task/${encodeURIComponent(id)}`);
+    const chip = (name, ses) => `<span class="who-chip ${ses ? esc(ses.provider) : "other"}">${esc(name || "?")}${ses ? ` · ${ses.provider === "claude" ? "Claude" : "Codex"}${ses.mode === "worker" ? " worker" : ""}` : (t.teammate && name === t.to ? " · 팀원" : "")}</span>`;
+    const tl = (t.timeline || []).map(e => `<li class="${esc(e.tone)}"><div class="when">${e.at ? `${clock(e.at)} · ${after(e.after_s)}` : "아직"}</div>` +
+      `<span class="step">${esc(e.step)}</span><span class="txt">${esc(e.text)}</span></li>`).join("");
+    const jev = t.jev ? Object.entries(t.jev).sort((a, b) => b[1] - a[1]).map(([k, p]) =>
+      `<div class="bar"><span>${esc(k)}</span><span><i style="width:${Math.round(p*100)}%"></i></span><span>${Math.round(p*100)}%</span></div>`).join("") : "";
+    const acts = !t.terminal ? `<div class="acts">` + (t.status === "held" ? `<button class="btn primary" data-act="approve" data-id="${esc(t.task_id)}">승인</button>` : "") +
+      `<button class="btn" data-act="cancel" data-id="${esc(t.task_id)}">취소</button></div>` : "";
+    const kindName = {direct: "같은 provider 직접 전달", native: "Claude 직접 메시지 (관찰)"}[t.kind] || "Claude ↔ Codex 중계";
+    box.innerHTML = `<div class="meta">${esc(t.task_id)} · ${esc(STATUS[t.status] || t.status)} · ${kindName}${t.sandbox ? " · 권한 " + esc(t.sandbox) : ""}</div>` +
+      `<h3>${esc(t.title)}</h3><div class="parties">${chip(t.from, t.from_session)}<span aria-hidden="true">→</span>${chip(t.to, t.to_session)}</div>` + acts +
+      (tl ? `<h4>중계 경과</h4><ol class="tl">${tl}</ol>` : "") +
+      `<h4>보낸 내용</h4><pre>${hl(t.body)}</pre>` +
+      (t.note ? `<p class="note">${esc(t.note)}</p>` : "") +
+      ((t.acceptance || []).length ? `<h4>완료 조건</h4><pre>${esc(t.acceptance.map(a => "- " + a).join("\n"))}</pre>` : "") +
+      (t.result || t.error ? `<h4>${t.result ? "결과" : "오류"}</h4><pre>${hl(t.result || t.error)}</pre>` : "") +
+      (jev ? `<h4>Jev 역할 판단</h4>${jev}` : "") +
+      (t.route_meta ? `<details class="raw"><summary>라우팅 원본 기록</summary><pre>${esc(JSON.stringify({route: t.route_meta, log: t.route_log}, null, 1))}</pre></details>` : "");
+  } catch (err) { box.innerHTML = `<p class="placeholder">불러오지 못했습니다: ${esc(err.message)}</p>`; }
+  $("detail").classList.add("open"); $("detail").scrollTop = 0;
+}
+function closeDetail() { $("detail").classList.remove("open"); }
+
+/* ── 승인·취소·보내기: 같은 버튼을 한 번 더 눌러 확인 ── */
+async function act(btn) {
+  const id = btn.dataset.id, what = btn.dataset.act, label = {approve:"승인", cancel:"취소", route:"보내기"}[what];
+  if (armed !== btn) { if (armed) disarm(); armed = btn; btn.dataset.label = btn.textContent; btn.textContent = `${label} 확인 — 한 번 더 누르기`;
+    btn.classList.add("arm"); armed.timer = setTimeout(disarm, 4000); return; }
+  disarm();
+  const body = {task_id: id};
+  if (what === "route") { body.to = document.querySelector(`[data-route-in="${CSS.escape(id)}"]`)?.value.trim(); if (!body.to) { toast("보낼 세션이나 역할을 입력하세요"); return; } }
+  try { const r = await api(`/api/${what}`, body); toast(`${label}했습니다: ${id}${r.to ? " → " + r.to : ""}`); if (selected === id) openDetail(id); }
+  catch (err) { toast(`${label}하지 못했습니다: ${err.message}`); }
+  refresh();
+}
+function disarm() { if (!armed) return; clearTimeout(armed.timer); armed.textContent = armed.dataset.label; armed.classList.remove("arm"); armed = null; }
+
+document.addEventListener("click", e => {
+  const a = e.target.closest("[data-act]"); if (a) return act(a);
+  const o = e.target.closest("[data-open]"); if (o) return openDetail(o.dataset.open);
+  const c = e.target.closest(".chip"); if (c) return setFilter({ kind: c.dataset.kind });
+  const n = e.target.closest(".node"); if (n) return setFilter({ session: F.session === n.dataset.session ? "" : n.dataset.session });
+});
+$("q").addEventListener("input", e => { F.q = e.target.value; clearTimeout(typing); typing = setTimeout(() => { typing = null; setFilter({}); }, 300); });
+$("f-status").addEventListener("change", e => setFilter({ status: e.target.value }));
+$("f-since").addEventListener("change", e => setFilter({ since: e.target.value }));
+$("f-session").addEventListener("change", e => setFilter({ session: e.target.value }));
+$("f-mates").addEventListener("change", e => setFilter({ mates: e.target.checked }));
+$("more").addEventListener("click", () => { limit += 100; loadFlows(); });
+$("reset").addEventListener("click", () => setFilter({ ...DEFAULTS }));
+$("close").addEventListener("click", closeDetail);
+document.addEventListener("keydown", e => {
+  if (e.key === "/" && !e.target.matches("input, select, textarea")) { e.preventDefault(); $("q").focus(); return; }
+  if (e.key === "Escape") { disarm(); if (document.activeElement === $("q") && F.q) { setFilter({ q: "" }); return; } closeDetail(); return; }
+  const row = e.target.closest?.(".row");
+  if (row && e.key === "Enter") return openDetail(row.dataset.open);
+  if (row && (e.key === "ArrowDown" || e.key === "ArrowUp")) { e.preventDefault();
+    const sib = e.key === "ArrowDown" ? row.nextElementSibling : row.previousElementSibling; if (sib?.classList.contains("row")) { sib.focus(); openDetail(sib.dataset.open); } }
+});
+document.addEventListener("visibilitychange", refresh);
+syncControls(); refresh(); setInterval(refresh, 4000);
+</script>
+</body>
+</html>
