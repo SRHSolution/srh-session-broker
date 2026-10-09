@@ -6,6 +6,7 @@
   srhbroker register <이름> <provider> [--mode worker|interactive] [--role r]... [--alias a]...
   srhbroker register --session <세션ID> [--role r]...   기존 Claude/Codex 세션 등록 (이름 = rename 이름)
   srhbroker discover [--days 7] [--all]                 등록할 수 있는 기존 세션 목록
+  srhbroker rename <지금 이름> <새 이름>               등록 이름 바꾸기 (세션 ID·역할·별칭 유지, 옛 이름은 별칭)
   srhbroker deliver <이름> [--wait]                     받은 메시지를 herdr 창에 바로 넣기 (바쁘면 쉴 때까지 대기)
   srhbroker status                                      데몬·herdr·세션별 창 연결·대기 작업 점검 (읽기 전용)
   srhbroker watch [--interval 3]                        터미널 대시보드 (herdr 창에 띄워 두기)
@@ -160,6 +161,9 @@ def main(argv: list[str] | None = None) -> int:
 
     u = sub.add_parser("unregister")
     u.add_argument("name")
+    rn = sub.add_parser("rename", help="등록 이름 바꾸기 (세션 ID·역할·별칭 유지, 옛 이름은 별칭, 기록 이관)")
+    rn.add_argument("old", help="지금 이름 (등록에서 지워진 옛 이름이면 그 기록을 new 세션이 이어받음)")
+    rn.add_argument("new")
 
     sub.add_parser("sessions")
     t = sub.add_parser("tasks")
@@ -325,6 +329,9 @@ def _dispatch(a: argparse.Namespace) -> int:
                          "name": reg.name if reg else (normalize_name(ns.title) or "(직접 지정)"),
                          "registered": "✔" if reg else "", "cwd": ns.cwd or ""})
         _table(rows, ["updated", "provider", "session_id", "title", "name", "registered", "cwd"])
+    elif a.cmd == "rename":
+        notes = []
+        _print({**b.rename(a.new, old=a.old, notes=notes).public(), "notes": notes})
     elif a.cmd == "unregister":
         print("삭제됨" if b.store.remove_session(a.name) else "없음")
     elif a.cmd == "sessions":

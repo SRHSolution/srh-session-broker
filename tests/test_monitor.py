@@ -131,7 +131,7 @@ async def test_dashboard_security_and_actions(dash):
     origin = f"http://127.0.0.1:{port}"
     assert _req(port, "/")[0] == 403
     code, page = _req(port, f"/?t={token}")
-    assert code == 200 and "교환대".encode() in page
+    assert code == 200 and b"<title>Session Broker Dashboard</title>" in page
     assert _req(port, "/api/snapshot")[0] == 403
     assert _req(port, "/api/snapshot", token=token, host="evil.example")[0] == 403           # DNS 리바인딩
     code, body = _req(port, "/api/snapshot", token=token)

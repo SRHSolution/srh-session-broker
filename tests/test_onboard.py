@@ -79,3 +79,14 @@ def test_demo_seeds_separate_home_and_protects_real_home(tmp_path, monkeypatch, 
     for st in ("done", "delivered", "held", "needs_routing", "cancelled"):
         assert st in rows
     assert not (real / "broker.db").exists()
+
+
+def test_apply_codex_adds_only_missing_tool_approvals(homes):
+    _, xh = homes
+    (xh / "config.toml").write_text('[mcp_servers.srhbroker]\ncommand = "srhbroker"\nargs = ["mcp"]\n'
+                                    '[mcp_servers.srhbroker.tools.send]\napproval_mode = "approve"\n', encoding="utf-8")
+    out = onboard.apply_codex()
+    assert any("새 도구 자동 승인 추가" in x for x in out)
+    tools = tomllib.loads((xh / "config.toml").read_text(encoding="utf-8"))["mcp_servers"]["srhbroker"]["tools"]
+    assert set(tools) == set(onboard.MCP_TOOLS)
+    assert not any("새 도구" in x for x in onboard.apply_codex())        # 다시 적용하면 추가할 것 없음

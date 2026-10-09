@@ -221,15 +221,37 @@ class Store:
             c.execute("DELETE FROM aliases WHERE name=?", (old,))
             c.execute("UPDATE sessions SET name=?, aliases=?, updated_at=? WHERE name=?", (new, _j(aliases), now_iso(), old))
             c.executemany("INSERT INTO aliases(alias, name) VALUES (?,?)", [(x, new) for x in aliases])
-            for sql in ("UPDATE tasks SET to_addr=? WHERE to_addr=?", "UPDATE tasks SET from_addr=? WHERE from_addr=?",
-                        "UPDATE direct_queue SET to_name=? WHERE to_name=?",
-                        "UPDATE direct_queue SET from_name=? WHERE from_name=?",
-                        "UPDATE push_log SET session=? WHERE session=?",
-                        "UPDATE flow_log SET from_name=? WHERE from_name=?", "UPDATE flow_log SET to_name=? WHERE to_name=?"):
-                c.execute(sql, (new, old))
+            self._move_refs(c, old, new)
         s = self.get_session(new)
         assert s is not None
         return s
+
+    # 이름으로 묶인 기록: 작업 보낸 쪽·받는 쪽, 직접 전달, 푸시 기록, 관찰 기록
+    _NAME_REFS = ("UPDATE tasks SET to_addr=? WHERE to_addr=?", "UPDATE tasks SET from_addr=? WHERE from_addr=?",
+                  "UPDATE direct_queue SET to_name=? WHERE to_name=?", "UPDATE direct_queue SET from_name=? WHERE from_name=?",
+                  "UPDATE push_log SET session=? WHERE session=?",
+                  "UPDATE flow_log SET from_name=? WHERE from_name=?", "UPDATE flow_log SET to_name=? WHERE to_name=?")
+
+    def _move_refs(self, c: sqlite3.Connection, old: str, new: str) -> int:
+        return sum(c.execute(sql, (new, old)).rowcount for sql in self._NAME_REFS)
+
+    def adopt_name(self, old: str, new: str) -> int:
+        """등록에서 지워졌지만 기록이 남은 옛 이름을 세션 new 가 이어받는다: 기록을 옮기고 옛 이름을 별칭으로 붙인다."""
+        with self.tx() as c:
+            if c.execute("SELECT 1 FROM sessions WHERE name=?", (old,)).fetchone():
+                raise BrokerError(f"'{old}' 은 등록된 세션입니다 — rename 으로 바꾸세요")
+            row = c.execute("SELECT * FROM sessions WHERE name=?", (new,)).fetchone()
+            if not row:
+                raise BrokerError(f"등록되지 않은 세션 '{new}'")
+            owner = c.execute("SELECT name FROM aliases WHERE alias=?", (old,)).fetchone()
+            if owner and owner["name"] != new:
+                raise BrokerError(f"'{old}' 은 세션 '{owner['name']}' 의 별칭입니다")
+            n = self._move_refs(c, old, new)
+            if not owner:
+                aliases = [*(_uj(row["aliases"]) or []), validate_name(old)]
+                c.execute("UPDATE sessions SET aliases=?, updated_at=? WHERE name=?", (_j(aliases), now_iso(), new))
+                c.execute("INSERT INTO aliases(alias, name) VALUES (?,?)", (validate_name(old), new))
+        return n
 
     def remove_session(self, name: str) -> bool:
         with self.tx() as c:

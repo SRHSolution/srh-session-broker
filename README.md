@@ -137,6 +137,7 @@ srhbroker demo        # 임시 폴더에 예시 세션·작업을 만들고, 보
 | 보낸 일 취소 | "방금 보낸 거 취소해줘" | `cancel` — 이미 전달됐으면 받는 창에 중단 알림 |
 | 받은 것 확인 | "broker 우편함 확인해줘" | `inbox(mark=false)` |
 | 내 등록 확인 | "broker whoami 확인해줘" | 등록 이름과 rename 이름이 다르면 `hint` 로 알려 줌 |
+| 등록 이름 바꾸기 | (`/rename` 후) "broker 등록 이름도 새 이름으로 바꿔줘" | `rename(new_name)` — 세션 ID·역할·별칭 유지, 옛 이름은 별칭, 대기 작업·회신도 새 이름으로 |
 
 ### 터미널에서
 
@@ -150,6 +151,7 @@ srhbroker demo        # 임시 폴더에 예시 세션·작업을 만들고, 보
 | `srhbroker send "<본문>" --to <이름\|역할> [--wait]` | 사람이 직접 보내기 (`from=user`) |
 | `srhbroker approve <id>` · `cancel <id>` · `route <id> <대상>` | 승인 · 취소 · 대상 지정 |
 | `srhbroker discover` · `register --session <ID>` · `sessions` | 세션 찾기 · 등록 · 목록 |
+| `srhbroker rename <지금 이름> <새 이름>` | 등록 이름 바꾸기. 지워진 옛 이름을 주면 그 기록을 새 이름 세션이 이어받음 |
 | `srhbroker setup claude\|codex [--apply]` · `init` · `demo` | 연결 설정 · 초기화 · 예시 데이터 |
 
 ---
@@ -264,6 +266,8 @@ srhbroker register --session <세션ID> --name pcb-review   # rename 하지 않�
 - 세션을 다시 rename 하면 Stop hook 이 새 이름을 **별칭으로 추가**합니다. 처음 등록한 이름도 계속 쓸 수 있습니다.
 - 같은 rename 이름으로 **새 세션을 만든 경우**(이전 세션은 닫힘): 등록하면 새 세션이 그 이름을 **이어받습니다**. 그 이름 앞으로 대기 중인 메시지도 새 세션이 받습니다. 이전 세션 창이 열려 있는지는 herdr 로 확인하고, herdr 밖이면 이전 세션 기록이 10분 넘게 바뀌지 않았을 때 닫힌 것으로 봅니다.
 - 같은 이름의 창이 **둘 다 열려 있으면** 덮어쓰지 않고 오류를 냅니다 → 한쪽을 다른 이름으로 rename 하거나 `--name`으로 지정하세요. 다른 provider 가 쓰는 이름, worker 이름도 이어받지 않습니다.
+- 등록 이름만 바꾸려면 `rename`(MCP 도구·CLI)을 씁니다. unregister 후 다시 등록하면 옛 이름 앞 기록이 끊기므로 쓰지 마세요 — 이미 그렇게 했다면 `srhbroker rename <옛 이름> <새 이름>` 이 남은 기록을 이어받습니다.
+- 세션 안에서 `register(name=..., provider=...)` 를 불러도 지금 이 세션(같은 provider·interactive)이면 세션 ID 에 연결해 등록합니다(세션 ID 없는 별도 항목을 만들지 않음).
 - 이미 등록된 세션에서 `register`를 다시 부르면 **rename 이름(또는 지정한 이름)으로 옮깁니다**. 이전 이름은 별칭으로 남고, 이전 이름 앞으로 쌓인 작업·회신·직접 전달도 함께 옮겨집니다.
 
 #### 문제 해결: 세션이 자기를 다른 이름으로 알 때
@@ -368,6 +372,7 @@ srhbroker dashboard --open      # 로컬 웹 대시보드 — 출력된 주소(�
 | `cancel(task_id)` | 내가 보낸 작업 취소 (보낸 세션만, CLI 의 사람은 모두). 이미 전달됐으면 받는 창에 중단 알림. 같은 provider 직접 전달은 기록이 없어 취소 불가 |
 | `reply(task_id, result, status)` | 받은 작업 회신 (담당 세션만 가능) |
 | `route(task_id, to)` | needs_routing 지정 |
+| `rename(new_name, old_name?)` | 지금 이 세션의 등록 이름 바꾸기 (세션 ID·역할·별칭·설명·권한 유지, 옛 이름은 별칭, 기록 이관). `old_name` 은 지워진 내 옛 이름을 이어받을 때만 |
 | `register` / `sessions` / `whoami` | 관리 |
 
 worker 세션은 턴의 **최종 응답이 자동으로 회신**됩니다. 턴 중에 `reply`를 직접 호출하면 그 회신이 우선합니다.
@@ -418,6 +423,10 @@ uv run pytest -q
 - README 화면은 예시 데이터로 다시 그릴 수 있습니다: `uv pip install -e ".[screenshots]"` 후 `python scripts/render_screenshots.py` (설치된 Chrome 사용, 없으면 `playwright install chromium` 후 `--bundled`).
 
 이슈와 PR 을 환영합니다. 버그 제보에는 `srhbroker doctor` 출력과 OS·Claude Code·Codex 버전을 함께 적어 주세요.
+
+## 변경 이력
+
+버전별 변경 내용은 [CHANGELOG.md](CHANGELOG.md) 에 있습니다. 설치한 버전은 `uv tool list` 로 보고, `uv tool upgrade srh-session-broker` 로 올립니다.
 
 ## 라이선스
 

@@ -20,7 +20,7 @@ from typing import Any
 
 from . import native
 
-MCP_TOOLS = ["sessions", "whoami", "register", "send", "route", "approve", "inbox", "reply", "status", "wait",
+MCP_TOOLS = ["sessions", "whoami", "register", "rename", "send", "route", "approve", "inbox", "reply", "status", "wait",
              "cancel", "recent"]
 CODEX_ENV_VARS = ["SRHBROKER_SELF", "SRHBROKER_TASK", "SRHBROKER_HOME", "TYPESAFE_API_KEY",
                   "HERDR_ENV", "HERDR_SOCKET_PATH", "HERDR_BIN_PATH", "HERDR_HOME", "HERDR_PANE_ID", "HERDR_TAB_ID",
@@ -126,6 +126,15 @@ def apply_codex() -> list[str]:
         out = ["MCP 서버: 이미 있음 — 기존 항목은 바꾸지 않습니다"]
         if missing:
             out.append(f"주의: env_vars 에 빠진 변수 {missing} — 직접 추가하세요 (Codex 는 환경 변수를 넘기지 않음)")
+        new_tools = [t for t in MCP_TOOLS if t not in (srv.get("tools") or {})]
+        if new_tools:   # 새 버전에서 늘어난 도구만 자동 승인 표를 덧붙인다 (기존 표는 그대로)
+            bak = _backup(path)
+            with path.open("a", encoding="utf-8") as f:
+                lines = ["", "# srhbroker 새 도구 자동 승인 (setup codex --apply)"]
+                for t in new_tools:
+                    lines += [f"[mcp_servers.srhbroker.tools.{t}]", 'approval_mode = "approve"', ""]
+                f.write("\n".join(lines) + "\n")
+            out.append(f"새 도구 자동 승인 추가: {', '.join(new_tools)}" + (f" (백업 {bak.name})" if bak else ""))
         return out
     exe = exe_command()
     block = ["", "# srhbroker — Claude ↔ Codex 세션 브로커 (srhbroker setup codex --apply 로 추가)",

@@ -138,6 +138,40 @@ class Broker:
                              description=description or (keep.description if keep else ""),
                              cwd=ns.cwd, native_id=ns.id, sandbox=sandbox, model=model)
 
+    def rename(self, new: str, *, old: str | None = None, native_id: str | None = None,
+               notes: list[str] | None = None) -> Session:
+        """등록 이름을 바꾼다. 세션 ID·provider·작업 폴더·역할·별칭·설명·권한은 그대로 두고 이름만 바꾼다.
+        옛 이름은 별칭으로 남고, 그 이름 앞으로 쌓인 작업·회신·직접 전달 기록도 새 이름으로 옮긴다.
+        old 를 주지 않으면 native_id 로 찾은 '지금 이 세션'. old 가 등록에서 지워졌지만 기록이 남은 이름이면
+        그 기록을 new 세션이 이어받는다(옛 이름은 별칭)."""
+        notes = notes if notes is not None else []
+        new = validate_name(new)
+        if old is None:
+            cur = self.identify(native_id)
+            if not cur:
+                raise BrokerError("이 세션은 아직 등록되지 않았습니다 — 먼저 register() 로 등록하세요")
+            old = cur.name
+        r = self.store.resolve_name(old)
+        if r is None:
+            n = self.store.adopt_name(old, new)
+            notes.append(f"등록에서 지워진 옛 이름 '{old}' 의 기록 {n}건을 '{new}' 로 옮기고 '{old}' 를 별칭으로 붙였습니다.")
+            s = self.store.get_session(new)
+            assert s is not None
+            return s
+        src = r[0]
+        if src.name == new:
+            notes.append(f"이미 '{new}' 입니다.")
+            return src
+        taken = self.store.get_session(new)
+        if taken and not (taken.native_id and taken.native_id == src.native_id):   # 같은 세션의 중복 항목은 정리
+            self._check_takeover(taken, native.NativeSession(src.provider, src.native_id or "", None, src.cwd, 0))
+            notes.append(f"이름 '{new}' 을 쓰던 항목({taken.provider} {(taken.native_id or '세션 ID 없음')[:8]})은 "
+                         "창이 닫혀 있거나 세션 ID 가 없어 정리하고 이어받았습니다.")
+        s = self.store.rename_session(src.name, new, replace=bool(taken))
+        notes.append(f"'{src.name}' → '{new}': 세션 ID·역할·별칭·설명·권한은 그대로이고, 옛 이름은 별칭으로 남으며 "
+                     "그 이름 앞 작업·회신 기록도 옮겼습니다.")
+        return s
+
     def _check_takeover(self, taken: Session, ns: native.NativeSession) -> None:
         """다른 세션이 쓰던 이름을 이 세션이 이어받아도 되는지. 안 되면 사용자가 정하도록 오류."""
         if taken.provider != ns.provider:

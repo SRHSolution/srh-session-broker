@@ -139,7 +139,7 @@ def serve(b: Any, port: int = 8765, open_browser: bool = False, new_token: bool 
     token = _token(b.cfg.home, new_token)
     httpd = ThreadingHTTPServer(("127.0.0.1", port), make_handler(b, token, port))
     url = f"http://127.0.0.1:{port}/?t={token}"
-    print(f"SRH Broker 대시보드: {url}\n(이 주소의 토큰이 있어야 열립니다. 재시작해도 같은 주소 — 바꾸려면 --new-token. "
+    print(f"Session Broker Dashboard: {url}\n(이 주소의 토큰이 있어야 열립니다. 재시작해도 같은 주소 — 바꾸려면 --new-token. "
           "Ctrl+C 로 종료)", flush=True)
     if open_browser:
         webbrowser.open(url)

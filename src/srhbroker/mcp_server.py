@@ -33,6 +33,8 @@ SRH Session Broker — Claude ↔ Codex 사이의 작업 위임·메시지 교�
 - 받는 쪽에 행동을 요구하지 않는 알림(상태 공유·완료 보고 등)은 kind='message' 로 보낸다. 알림은 승인 대상이 아니고,
   받는 창이 닫혀 있으면 기다리지 않고 소멸한다(delivery=dropped). 다시 보내지 않는다.
 - send 결과에 delivery_note 가 있으면(받는 창이 닫힘 등) 그 내용을 사용자에게 알린다.
+- 등록 이름을 바꿀 때(사용자가 /rename 으로 바꾼 뒤 등)는 rename(new_name) 을 쓴다 — 세션 ID·역할·별칭은 유지되고
+  옛 이름은 별칭, 대기 작업·회신은 새 이름으로 이어진다. unregister 후 다시 register 하지 않는다.
 - 세션 등록은 사용자가 요청할 때 register() 를 인자 없이 호출한다(rename 이름으로 등록·이전 이름에서 옮김·닫힌 이전 세션의
   이름 이어받기). 실패하면 이름을 지어내거나 CLI·DB 로 우회하지 말고 오류 내용을 사용자에게 알리고 지시를 받는다.
   whoami 결과에 hint 가 있으면(등록 이름과 rename 이름이 다름) 사용자에게 알린다.
@@ -138,7 +140,10 @@ async def register(ctx: Context, name: str | None = None, provider: str | None =
     try:
         b = broker()
         sid = _native_id(ctx)[0]
-        if provider is None and sid and not os.environ.get("SRHBROKER_TASK"):
+        own = native.find(sid) if sid and not os.environ.get("SRHBROKER_TASK") else None
+        # provider 를 줘도 '지금 이 세션'(같은 provider·interactive)이면 세션 ID 에 연결해 등록한다 —
+        # 세션 ID 없는 별도 항목을 만들지 않는다. 다른 세션(worker 등)을 등록할 때만 이름·provider 로 등록
+        if own and (provider is None or (provider == own.provider and mode == "interactive")):
             notes: list[str] = []
             s = b.register_native(sid, name=name, mode=mode, roles=roles, aliases=aliases,
                                   description=description, sandbox=sandbox, notes=notes)
@@ -147,6 +152,33 @@ async def register(ctx: Context, name: str | None = None, provider: str | None =
             raise BrokerError("name 과 provider 를 지정하세요 (이 세션의 ID 를 알 수 없습니다)")
         return b.register(name, provider, mode=mode, roles=roles, aliases=aliases, description=description,
                           cwd=cwd or os.getcwd(), sandbox=sandbox).public()
+    except BrokerError as e:
+        raise _err(e) from e
+
+
+@mcp.tool()
+async def rename(new_name: str, old_name: str | None = None, ctx: Context | None = None) -> dict[str, Any]:
+    """지금 이 세션의 브로커 등록 이름을 바꾼다. 세션 ID·provider·작업 폴더·역할·별칭·설명·권한은 그대로.
+    옛 이름은 별칭으로 남고 그 이름 앞 작업·회신 기록도 새 이름으로 옮긴다. 결과의 notes 를 사용자에게 알린다.
+    old_name: 생략하면 지금 이 세션. 등록에서 지워졌지만 기록이 남은 내 옛 이름을 이어받을 때만 지정한다
+    (이때 new_name 은 지금 이 세션의 이름). 다른 세션의 이름은 그 세션에서 바꾸거나 터미널에서 srhbroker rename 으로.
+    사용자가 요청할 때만 호출한다."""
+    try:
+        b = broker()
+        sid = _native_id(ctx)[0] if ctx else None
+        me = b.identify(sid)
+        if not me:
+            raise BrokerError("이 세션은 아직 등록되지 않았습니다 — 먼저 register() 로 등록하세요")
+        if old_name:
+            r = b.store.resolve_name(old_name)
+            if r and r[0].name != me.name:
+                raise BrokerError(f"'{old_name}' 은 다른 세션({r[0].name})입니다 — 그 세션에서 바꾸거나 터미널에서 "
+                                  "srhbroker rename 을 쓰세요")
+            if not r and new_name != me.name:
+                raise BrokerError(f"지워진 옛 이름 '{old_name}' 을 이어받으려면 new_name 에 지금 이름('{me.name}')을 주세요")
+        notes: list[str] = []
+        s = b.rename(new_name, old=old_name or me.name, notes=notes)
+        return {**s.public(), "notes": notes}
     except BrokerError as e:
         raise _err(e) from e
 

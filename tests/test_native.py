@@ -323,3 +323,76 @@ def test_hook_cli_never_fails(tmp_path, monkeypatch):
     monkeypatch.setattr(hooks, "claude_stop", lambda *a, **k: 1 / 0)
     assert cli.main(["hook", "claude-stop"]) == 0
     assert "ZeroDivisionError" in (tmp_path / "hook-error.log").read_text(encoding="utf-8")
+
+
+# ── 등록 이름 바꾸기 (rename) ─────────────────────────────────────────────
+
+async def test_rename_keeps_identity_and_moves_pending_refs(nb, homes):
+    ch, _ = homes
+    _claude_session(ch, C_ID, r"D:\proj", "alpha-cam")
+    nb.register_native(C_ID, roles=["planner"], aliases=["ac"], description="설명", sandbox="read-only")
+    nb.register("builder", "codex", roles=["builder"])
+    to_me = await nb.send("확인해 줘", sender="builder", to="alpha-cam")
+    mine = await nb.send("구현해 줘", sender="alpha-cam", to="builder")
+    notes: list[str] = []
+    s = nb.rename("alpha-cam-claude", old="alpha-cam", notes=notes)
+    assert (s.name, s.native_id, s.roles, s.description, s.sandbox.value) == ("alpha-cam-claude", C_ID, ["planner"], "설명", "read-only")
+    assert set(s.aliases) == {"ac", "alpha-cam"} and "옛 이름은 별칭" in notes[0]
+    assert nb.store.get_session("alpha-cam") is None and nb.identify(C_ID).name == "alpha-cam-claude"
+    assert [t["task_id"] for t in nb.inbox("alpha-cam-claude", mark=False)["incoming"]] == [to_me["task_id"]]
+    nb.store.inbox("builder", mark=True)
+    nb.reply(mine["task_id"], "끝", sender="builder")                    # 옛 이름으로 보낸 작업의 회신도 새 이름으로
+    assert [t["task_id"] for t in nb.inbox("alpha-cam-claude", mark=False)["replies"]] == [mine["task_id"]]
+    r = await nb.send("옛 이름으로", sender="builder", to="alpha-cam")    # 옛 이름(별칭)으로 보내도 닿는다
+    assert r["to"] == "alpha-cam-claude"
+
+
+def test_rename_conflicts(nb, homes):
+    ch, xh = homes
+    _claude_session(ch, C_ID, r"D:\a", "alpha-cam")
+    _claude_session(ch, C_ID2, r"D:\b", "other-cam")
+    nb.register_native(C_ID)
+    nb.register_native(C_ID2)
+    nb.herdr = _Panes(C_ID, C_ID2)
+    with pytest.raises(BrokerError, match="창이 지금 열려"):              # 열려 있는 다른 세션의 이름
+        nb.rename("other-cam", old="alpha-cam")
+    nb.register("codex-x", "codex")
+    with pytest.raises(BrokerError, match="codex 세션이 쓰고"):           # 다른 provider 이름
+        nb.rename("codex-x", old="alpha-cam")
+    nb.register("alpha-cam-claude", "claude", mode="interactive")       # 세션 ID 없는 실수 항목 → 정리하고 이어받음
+    notes: list[str] = []
+    assert nb.rename("alpha-cam-claude", old="alpha-cam", notes=notes).native_id == C_ID
+    assert "정리하고 이어받았습니다" in notes[0]
+
+
+async def test_rename_adopts_records_of_deleted_old_name(nb, homes):
+    """실제로 겪은 경우: 옛 이름을 unregister 하고 새 이름으로 다시 등록 → 옛 이름 기록·미확인 회신을 이어받는다."""
+    ch, _ = homes
+    _claude_session(ch, C_ID, r"D:\proj", "alpha-cam")
+    nb.register_native(C_ID)
+    nb.register("builder", "codex")
+    mine = await nb.send("구현해 줘", sender="alpha-cam", to="builder")
+    nb.store.inbox("builder", mark=True)
+    nb.reply(mine["task_id"], "끝", sender="builder")
+    nb.store.remove_session("alpha-cam")
+    nb.register_native(C_ID, name="alpha-cam-claude")
+    assert nb.inbox("alpha-cam-claude", mark=False)["replies"] == []      # 끊긴 상태
+    notes: list[str] = []
+    s = nb.rename("alpha-cam-claude", old="alpha-cam", notes=notes)
+    assert "alpha-cam" in s.aliases and "기록" in notes[0]
+    assert [t["task_id"] for t in nb.inbox("alpha-cam-claude", mark=False)["replies"]] == [mine["task_id"]]
+
+
+async def test_mcp_register_with_provider_links_own_session_and_rename_tool(mcp_nb, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", C_ID)
+    mcp_nb.register("other", "codex")
+    async with Client(mcp_server.mcp) as c:
+        reg = _data(await c.call_tool("register", {"name": "project-lead", "provider": "claude"}))
+        assert reg["has_native_id"] is True                              # 세션 ID 없는 별도 항목을 만들지 않는다
+        out = _data(await c.call_tool("rename", {"new_name": "project-lead-claude"}))
+        assert out["name"] == "project-lead-claude" and out["notes"]
+        who = _data(await c.call_tool("whoami", {}))
+        assert who["self"] == "project-lead-claude"
+        res = await c.call_tool("rename", {"new_name": "x", "old_name": "other"})
+        assert res.is_error and "다른 세션" in res.content[0].text
+    assert [s.name for s in mcp_nb.store.list_sessions()] == ["other", "project-lead-claude"]
