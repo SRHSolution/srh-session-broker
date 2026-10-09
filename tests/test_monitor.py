@@ -108,11 +108,13 @@ def dash(mb):
     srv.server_close()
 
 
-def _req(port, path, *, token=None, method="GET", body=None, origin=None, host=None):
+def _req(port, path, *, token=None, method="GET", body=None, origin=None, host=None, cookie=None, headers=None):
     r = urllib.request.Request(f"http://127.0.0.1:{port}{path}", method=method,
                                data=json.dumps(body).encode() if body is not None else None)
     if token:
         r.add_header("X-Token", token)
+    if cookie:
+        r.add_header("Cookie", cookie)
     if origin:
         r.add_header("Origin", origin)
     if host:
@@ -121,6 +123,8 @@ def _req(port, path, *, token=None, method="GET", body=None, origin=None, host=N
         r.add_header("Content-Type", "application/json")
     try:
         with urllib.request.urlopen(r, timeout=5) as resp:
+            if headers is not None:
+                headers.update(resp.headers.items())
             return resp.status, resp.read()
     except urllib.error.HTTPError as e:
         return e.code, e.read()
@@ -230,3 +234,27 @@ async def test_timeline_explains_hardware_rule(mb):
     assert t["sandbox"] == "workspace-write"
     text = {e["step"]: e["text"] for e in t["timeline"]}["안전 판단"]
     assert "X-ray" in text and "읽기 전용 아님" in text
+
+
+async def test_dashboard_remembers_token_in_cookie_for_refresh(dash):
+    """처음 토큰 주소로 열면 쿠키를 남겨, 새로고침(토큰 없는 주소)·API·조작이 쿠키로 통한다. 보안 검사는 그대로."""
+    b, token, port = dash
+    origin = f"http://127.0.0.1:{port}"
+    hdrs: dict = {}
+    code, _ = _req(port, f"/?t={token}", headers=hdrs)
+    set_cookie = hdrs.get("Set-Cookie", "")
+    assert code == 200 and f"srhb_token_{port}={token}" in set_cookie
+    assert "HttpOnly" in set_cookie and "SameSite=Strict" in set_cookie and "Max-Age=" in set_cookie
+    cookie = f"srhb_token_{port}={token}"
+    code, page = _req(port, "/", cookie=cookie)                                          # 새로고침
+    assert code == 200 and b"<title>Session Broker Dashboard</title>" in page
+    assert _req(port, "/api/snapshot", cookie=cookie)[0] == 200                         # 새 탭(헤더 없음)
+    code, page = _req(port, "/", cookie=f"srhb_token_{port}=wrong")
+    assert code == 403 and "srhbroker dashboard".encode() in page                       # 안내 페이지
+    assert _req(port, "/", cookie=f"srhb_token_1={token}")[0] == 403                    # 다른 포트용 쿠키
+    assert _req(port, "/api/snapshot", cookie=cookie, host="evil.example")[0] == 403    # DNS 리바인딩
+    r = await b.send("취소할 것", sender="pix-claude", to="pix-codex")
+    assert _req(port, "/api/cancel", cookie=cookie, method="POST", body={"task_id": r["task_id"]},
+                origin="http://evil.example")[0] == 403                                  # CSRF
+    code, body = _req(port, "/api/cancel", cookie=cookie, method="POST", body={"task_id": r["task_id"]}, origin=origin)
+    assert code == 200 and json.loads(body)["status"] == "cancelled"
