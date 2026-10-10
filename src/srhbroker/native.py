@@ -7,6 +7,7 @@
 
 실행 중인 세션이 자기 ID 를 아는 방법 (claude 2.1 / codex-cli 0.159 에서 확인):
 - Claude MCP 서버·hook: 환경 변수 CLAUDE_CODE_SESSION_ID, hook stdin 의 session_id
+  (창 안에서 /resume 하면 환경 변수는 처음 프로세스 ID 로 남고 hook 은 이어 연 세션 ID 를 준다 — claude_current)
 - Codex MCP 서버: 도구 호출 _meta.threadId (환경 변수로는 전달되지 않는다), hook stdin 의 session_id
 """
 
@@ -102,6 +103,29 @@ def find(session_id: str, provider: str | None = None, transcript_path: str | No
         path = path or next((codex_home() / "sessions").rglob(f"rollout-*{session_id}.jsonl"), None)
         if path:
             return _read_codex(path, _codex_titles())
+    return None
+
+
+def claude_current(runtime_id: str, *, limit: int = 20, tail: int = 262144) -> str | None:
+    """Claude 프로세스 ID(CLAUDE_CODE_SESSION_ID)로 그 프로세스가 지금 쓰는 대화 기록의 세션 ID 를 찾는다.
+    창 안에서 /resume 하면 프로세스 ID 는 그대로이고 기록은 이어 연 세션 파일에 쌓인다. 기록 줄마다
+    "session_id"(프로세스) 와 "sessionId"(대화) 가 함께 남으므로, 최근 기록 끝부분에서 그 프로세스 ID 를 찾는다."""
+    if not runtime_id:
+        return None
+    files = sorted(((p.stat().st_mtime, p) for p in (claude_home() / "projects").glob("*/*.jsonl")),
+                   key=lambda x: -x[0])
+    keys = [b'"session_id":' + sep + b'"' + runtime_id.encode() + b'"' for sep in (b"", b" ")]
+    for _, p in files[:limit]:
+        try:
+            with p.open("rb") as f:
+                f.seek(0, 2)
+                f.seek(max(0, f.tell() - tail))
+                data = f.read()
+        except OSError:
+            continue
+        i = max(data.rfind(k) for k in keys)
+        if i != -1 and (o := _line_at(data, i)) and isinstance(o.get("sessionId"), str):
+            return o["sessionId"]
     return None
 
 

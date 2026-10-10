@@ -396,3 +396,75 @@ async def test_mcp_register_with_provider_links_own_session_and_rename_tool(mcp_
         res = await c.call_tool("rename", {"new_name": "x", "old_name": "other"})
         assert res.is_error and "다른 세션" in res.content[0].text
     assert [s.name for s in mcp_nb.store.list_sessions()] == ["other", "project-lead-claude"]
+
+
+# ── 창 안에서 /resume 으로 세션을 바꾼 경우 · 이름 기준 다시 연결 ─────────────
+
+class _PaneHerdr:
+    def __init__(self, sid):
+        self.sid = sid
+
+    def available(self):
+        return True
+
+    def pane_session(self, pane, agent=None):
+        return self.sid if pane == "wR:p1" else None
+
+    def agents(self):
+        return [{"pane_id": "wR:p1", "agent": "claude", "agent_session": {"value": self.sid}}]
+
+    def find(self, sid):
+        return self.agents()[0] if sid == self.sid else None
+
+
+async def test_mcp_uses_herdr_pane_session_after_resume_inside_window(mcp_nb, monkeypatch):
+    """claude 를 새로 연 뒤(세션 Z) 창 안에서 /resume 으로 등록된 세션(C_ID)을 이어 열면 MCP 의 환경 변수는 Z 로 낡는다.
+    herdr 창 안이면 창의 현재 세션으로 자기를 알아본다."""
+    mcp_nb.register_native(C_ID)
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "zzzzzzzz-new-session-no-transcript")
+    monkeypatch.setenv("HERDR_PANE_ID", "wR:p1")
+    monkeypatch.setattr(mcp_server, "_PANE_CACHE", {})
+    mcp_nb.herdr = _PaneHerdr(C_ID)
+    async with Client(mcp_server.mcp) as c:
+        who = _data(await c.call_tool("whoami", {}))
+        assert (who["self"], who["native_id"], who["native_id_source"]) == ("project-lead", C_ID, "claude:herdr-pane")
+        reg = _data(await c.call_tool("register", {}))                   # 이름 생략 등록도 된다
+        assert reg["name"] == "project-lead" and reg["has_native_id"]
+
+
+async def test_mcp_finds_resumed_session_from_transcript_outside_herdr(mcp_nb, homes, monkeypatch):
+    """herdr 밖: 창 안 /resume 뒤에도 기록 줄의 session_id(프로세스)·sessionId(대화) 짝으로 자기 세션을 알아본다."""
+    ch, _ = homes
+    mcp_nb.register_native(C_ID)
+    runtime = "0f0f0f0f-runtime-process-id-000000000000"
+    line = {"type": "assistant", "session_id": runtime, "sessionId": C_ID}
+    with (ch / "projects" / "D--proj" / f"{C_ID}.jsonl").open("a", encoding="utf-8") as f:
+        f.write(json.dumps(line, separators=(",", ":")) + "\n")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", runtime)
+    monkeypatch.delenv("HERDR_PANE_ID", raising=False)
+    monkeypatch.setattr(mcp_server, "_TRANSCRIPT_CACHE", {})
+    assert native.claude_current(runtime) == C_ID and native.claude_current("unknown") is None
+    async with Client(mcp_server.mcp) as c:
+        who = _data(await c.call_tool("whoami", {}))
+        assert (who["self"], who["native_id"], who["native_id_source"]) == ("project-lead", C_ID, "claude:transcript")
+
+
+def test_reconnect_by_name_picks_latest_session_with_same_rename(nb, homes):
+    import os
+    import time
+    ch, _ = homes
+    old = _claude_session(ch, C_ID, r"D:\proj", "alpha-cam")
+    nb.register_native(C_ID, roles=["planner"], description="설명")
+    t = time.time() - 3600
+    os.utime(old, (t, t))
+    _claude_session(ch, C_ID2, r"D:\proj", "alpha-cam")                 # 계정을 바꿔 다시 연 세션, 같은 이름으로 rename
+    notes: list[str] = []
+    s = nb.reconnect("alpha-cam", notes=notes)
+    assert (s.native_id, s.roles, s.description) == (C_ID2, ["planner"], "설명") and "다시 연결" in notes[-1]
+    assert nb.identify(C_ID2).name == "alpha-cam" and nb.identify(C_ID) is None
+    notes.clear()
+    assert nb.reconnect("alpha-cam", notes=notes).native_id == C_ID2 and "이미" in notes[0]
+    assert nb.reconnect("alpha-cam", session_id=C_ID).native_id == C_ID       # 지정하면 그 세션으로
+    with pytest.raises(BrokerError, match="찾지 못했습니다"):
+        nb.register("ghost", "claude", mode="interactive")
+        nb.reconnect("ghost")

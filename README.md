@@ -167,6 +167,7 @@ srhbroker demo        # 임시 폴더에 예시 세션·작업을 만들고, 보
 | `srhbroker approve <id>` · `cancel <id>` · `route <id> <대상>` | 승인 · 취소 · 대상 지정 |
 | `srhbroker discover` · `register --session <ID>` · `sessions` | 세션 찾기 · 등록 · 목록 |
 | `srhbroker rename <지금 이름> <새 이름>` | 등록 이름 바꾸기. 지워진 옛 이름을 주면 그 기록을 새 이름 세션이 이어받음 |
+| `srhbroker reconnect <이름> [--session <ID>]` | 이름은 그대로 두고 연결된 세션 ID만 바꾸기(같은 rename 이름의 가장 최근 세션). 계정을 바꿔 다시 연 경우 등 |
 | `srhbroker setup claude\|codex [--apply]` · `init` · `demo` | 연결 설정 · 초기화 · 예시 데이터 |
 | `srhbroker update [--check] [--to vX.Y.Z] [--stop-all]` · `--version` | git 배포(저장소 태그)로 업데이트 · 설치 버전 |
 
@@ -274,7 +275,7 @@ srhbroker register --session <세션ID> --name pcb-review   # rename 하지 않�
 
 | | 출처 |
 |---|---|
-| Claude MCP 도구 | 환경 변수 `CLAUDE_CODE_SESSION_ID` |
+| Claude MCP 도구 | 환경 변수 `CLAUDE_CODE_SESSION_ID`. 창 안에서 `/resume` 한 경우 herdr 창의 현재 세션, herdr 밖이면 대화 기록에서 찾은 세션을 우선 |
 | Codex MCP 도구 | 도구 호출 `_meta.threadId` (Codex는 MCP 서버에 세션 ID를 환경 변수로 넘기지 않음) |
 | Stop hook | stdin 의 `session_id` |
 
@@ -294,7 +295,13 @@ srhbroker register --session <세션ID> --name pcb-review   # rename 하지 않�
 - Windows에서 Codex는 hook 명령을 PowerShell로 실행합니다. `"D:\...\srhbroker.exe" hook codex-stop`처럼 **따옴표로 시작하면 ParserError로 `hook exited with code 1`**이 납니다. 공백 없는 경로를 따옴표 없이 쓰세요 (Claude Code는 Git Bash로 실행해 따옴표가 있어도 됩니다).
 - `held`(사람 승인 대기) 작업은 기본적으로 터미널 `srhbroker approve <id>`로 승인합니다. `[broker] allow_mcp_approve = true`이면 세션 안에서 사용자가 승인했을 때 AI가 `approve` 도구로 승인합니다 (설정은 호출마다 다시 읽어 열린 창에도 바로 반영). AI는 작업과 보류 사유를 보여 주고 물은 뒤, 사용자가 대화창에서 한 승인의 말을 `confirmation`에 그대로 적어야 하며 이 말은 라우팅 기록에 남습니다.
 - Codex 는 MCP 도구마다 승인 창을 띄웁니다. 대화형 창이 승인 대기(blocked)에 걸리면 herdr 전달도 멈추므로 `~/.codex/config.toml`에 `[mcp_servers.srhbroker.tools.<도구>] approval_mode = "approve"`로 srhbroker 도구를 자동 승인합니다 (`approve` 포함 — 승인은 Codex 창 대신 대화창의 사용자 답변으로 대신).
-- 제약: Claude MCP 서버는 창을 연 시점의 세션 ID를 기억합니다. 같은 창에서 `/clear`·`/resume`으로 다른 세션으로 바꾸면 MCP 도구는 이전 세션으로 인식합니다 (Stop hook 은 정확). 다른 세션으로 쓰려면 창을 새로 여세요.
+- Claude 는 ID 를 둘 가집니다: 프로세스 ID(환경 변수 `CLAUDE_CODE_SESSION_ID`)와 대화 세션 ID(기록 파일 이름, `claude --resume <ID>`·hook 의 `session_id`). `claude`를 새로 연 뒤 창 안에서 `/resume`으로 다른 대화를 이어 열면 프로세스 ID 는 처음 값에 머물러 둘이 달라집니다 — 이때 세션에게 자기 ID 를 물으면 환경 변수의 프로세스 ID 를 답합니다. broker 등록의 기준은 **대화 세션 ID**이고, MCP 도구는 herdr 창의 현재 세션 → 대화 기록 줄의 `session_id`·`sessionId` 짝 순으로 대화 세션 ID 를 찾습니다(MCP 서버가 이 버전으로 다시 연결된 뒤부터). Stop hook 은 처음부터 대화 세션 ID 를 받습니다.
+
+#### 문제 해결: 같은 이름인데 세션 ID가 다를 때 (계정 전환·다시 열기)
+증상: 계정 A로 등록한 세션을 계정 B로 로그인해 다시 열었더니 새 세션이 생겼고, 같은 이름으로 rename 했지만 broker 는 예전 세션 ID에 연결돼 있음. 또는 `whoami`의 `self`가 비고 `register()`가 "이 세션의 ID 를 알 수 없습니다"로 실패.
+- 확인: `srhbroker discover`로 그 이름의 세션 ID들과 broker 이름을 비교합니다.
+- 해결: `srhbroker reconnect <이름>` — 같은 rename 이름의 **가장 최근 세션**으로 연결을 옮깁니다. 역할·별칭·설명은 그대로이고, 그 이름 앞 대기 메시지는 새 세션이 받습니다. 특정 세션을 고르려면 `--session <ID>`. 이전 창이 아직 열려 있어도 옮깁니다(명시적 요청이므로).
+- 창 안에서 `/resume`만 한 경우라면 세션이 말하는 ID(프로세스 ID)와 등록된 ID(대화 세션 ID)가 달라 보여도 등록은 맞습니다. 그 창에서 `/mcp` → srhbroker 다시 연결만 하면 됩니다.
 
 ### herdr 즉시 전달
 

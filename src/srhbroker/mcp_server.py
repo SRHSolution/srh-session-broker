@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import os
+import time
 from collections.abc import Mapping
 from typing import Any
 
@@ -71,8 +72,47 @@ def broker() -> Broker:
     return _broker
 
 
+_PANE_CACHE: dict[str, tuple[float, str | None]] = {}
+
+
+def _pane_session() -> str | None:
+    """이 MCP 서버를 띄운 herdr 창의 현재 Claude 세션 ID (3초 캐시). herdr 밖이면 None."""
+    pane = os.environ.get("HERDR_PANE_ID")
+    if not pane or os.environ.get("SRHBROKER_TASK"):
+        return None
+    hit = _PANE_CACHE.get(pane)
+    if hit and time.monotonic() - hit[0] < 3:
+        return hit[1]
+    try:
+        h = broker().herdr
+        sid = h.pane_session(pane, "claude") if h.available() else None
+    except Exception:
+        sid = None
+    _PANE_CACHE[pane] = (time.monotonic(), sid)
+    return sid
+
+
+_TRANSCRIPT_CACHE: dict[str, tuple[float, str | None]] = {}
+
+
+def _transcript_session(env_sid: str) -> str | None:
+    """프로세스 ID 로 지금 기록 중인 대화 세션 ID (10초 캐시). herdr 밖에서 창 안 /resume 을 알아내는 용도."""
+    hit = _TRANSCRIPT_CACHE.get(env_sid)
+    if hit and time.monotonic() - hit[0] < 10:
+        return hit[1]
+    try:
+        sid = native.claude_current(env_sid)
+    except Exception:
+        sid = None
+    _TRANSCRIPT_CACHE[env_sid] = (time.monotonic(), sid)
+    return sid
+
+
 def _native_id(ctx: Context | None) -> tuple[str | None, str | None]:
-    """실행 중인 Claude/Codex 세션 ID 와 그 출처."""
+    """실행 중인 Claude/Codex 세션 ID 와 그 출처.
+    Claude MCP 서버는 창을 연 시점의 CLAUDE_CODE_SESSION_ID 를 기억한다. 창 안에서 /resume 으로 다른 세션(예: 계정을 바꿔
+    다시 연 세션)으로 바꾸면 이 값이 낡으므로, herdr 창의 현재 세션 ID 를 우선하고, herdr 밖이면 대화 기록에서
+    그 프로세스가 지금 쓰는 세션을 찾는다. hook 의 session_id 는 처음부터 대화 세션 ID 다."""
     try:
         meta = ctx.request_context.meta if ctx else None
     except Exception:  # 요청 밖에서 호출된 경우
@@ -84,8 +124,13 @@ def _native_id(ctx: Context | None) -> tuple[str | None, str | None]:
         sid = meta.get("threadId") or meta.get("sessionId") or (turn.get("thread_id") if isinstance(turn, Mapping) else None)
         if sid:
             return sid, "codex:_meta.threadId"
-    if sid := os.environ.get("CLAUDE_CODE_SESSION_ID"):
-        return sid, "claude:CLAUDE_CODE_SESSION_ID"
+    env_sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    if env_sid and (pane_sid := _pane_session()):
+        return (pane_sid, "claude:herdr-pane") if pane_sid != env_sid else (env_sid, "claude:CLAUDE_CODE_SESSION_ID")
+    if env_sid and (cur := _transcript_session(env_sid)) and cur != env_sid:
+        return cur, "claude:transcript"
+    if env_sid:
+        return env_sid, "claude:CLAUDE_CODE_SESSION_ID"
     return None, None
 
 

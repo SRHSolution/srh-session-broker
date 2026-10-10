@@ -95,7 +95,7 @@ class Broker:
     def register_native(self, session_id: str, *, name: str | None = None, provider: str | None = None,
                         mode: str = "interactive", roles: list[str] | None = None, aliases: list[str] | None = None,
                         description: str = "", sandbox: str = "workspace-write", model: str | None = None,
-                        notes: list[str] | None = None) -> Session:
+                        notes: list[str] | None = None, force: bool = False) -> Session:
         """기존 Claude/Codex 세션을 등록한다. 이름은 rename 이름에서, provider·작업 폴더는 세션 기록에서 가져온다.
 
         - 이 세션이 이미 다른 이름으로 등록돼 있으면 그 등록을 새 이름으로 옮긴다
@@ -121,7 +121,7 @@ class Broker:
                                   "사용자에게 어느 쪽이 이 이름을 쓸지 물어보세요")
         takeover = bool(taken and taken.native_id != ns.id)
         if takeover:
-            self._check_takeover(taken, ns)
+            self._check_takeover(taken, ns, skip_live=force)
             notes.append(f"이름 '{name}' 을 쓰던 이전 {taken.provider} 세션({(taken.native_id or '-')[:8]})의 창이 닫혀 있어 "
                          "이 세션이 이름을 이어받았습니다. 그 이름 앞으로 대기 중인 메시지도 이 세션이 받습니다.")
         if mine and mine.name != name:
@@ -172,14 +172,39 @@ class Broker:
                      "그 이름 앞 작업·회신 기록도 옮겼습니다.")
         return s
 
-    def _check_takeover(self, taken: Session, ns: native.NativeSession) -> None:
+    def reconnect(self, name: str, *, session_id: str | None = None, notes: list[str] | None = None) -> Session:
+        """등록 이름을 rename 이름이 같은 다른 세션(새로 연 세션·계정을 바꿔 연 세션 등)에 다시 연결한다.
+        session_id 를 주지 않으면 최근 30일 안에서 rename 이름이 같은 가장 최근 세션을 고른다. 역할·별칭·설명은 그대로."""
+        notes = notes if notes is not None else []
+        r = self.store.resolve_name(name)
+        if not r:
+            raise BrokerError(f"등록되지 않은 이름 '{name}'")
+        s = r[0]
+        if not session_id:
+            same = [ns for ns in native.recent(30, provider=s.provider)
+                    if ns.title and (normalize_name(ns.title) == s.name or ns.title.strip().lower() == s.name)]
+            if not same:
+                raise BrokerError(f"rename 이름이 '{s.name}' 인 {s.provider} 세션을 최근 30일 안에서 찾지 못했습니다 — "
+                                  "그 세션을 rename 했는지 확인하거나 --session <세션 ID> 로 지정하세요")
+            session_id = max(same, key=lambda ns: ns.updated).id
+        if session_id == s.native_id:
+            notes.append(f"'{s.name}' 은 이미 그 세션({session_id[:8]})에 연결돼 있습니다.")
+            return s
+        old = s.native_id
+        out = self.register_native(session_id, name=s.name, provider=s.provider, mode=s.mode.value, sandbox=s.sandbox.value,
+                                   model=s.model, notes=notes, force=True)
+        notes.append(f"'{out.name}' 을 세션 {(old or '없음')[:8]} → {out.native_id[:8]} 로 다시 연결했습니다 "
+                     "(역할·별칭·설명 유지, 대기 메시지는 새 세션이 받음).")
+        return out
+
+    def _check_takeover(self, taken: Session, ns: native.NativeSession, *, skip_live: bool = False) -> None:
         """다른 세션이 쓰던 이름을 이 세션이 이어받아도 되는지. 안 되면 사용자가 정하도록 오류."""
         if taken.provider != ns.provider:
             raise BrokerError(f"이름 '{taken.name}' 은 {taken.provider} 세션이 쓰고 있습니다(이름은 provider 와 무관하게 유일). "
                               "임의의 이름을 만들지 말고 사용자에게 어떻게 할지 물어보세요")
         if taken.mode != SessionMode.INTERACTIVE:
             raise BrokerError(f"이름 '{taken.name}' 은 worker 세션 이름입니다 — 사용자에게 어떻게 할지 물어보세요")
-        if taken.native_id and self._native_live(taken):
+        if not skip_live and taken.native_id and self._native_live(taken):
             raise BrokerError(f"이름 '{taken.name}' 을 쓰는 다른 {taken.provider} 세션({taken.native_id[:8]})의 창이 지금 "
                               "열려 있습니다 — 같은 이름의 창이 둘입니다. 임의의 이름을 만들지 말고, 사용자에게 어느 창이 이 "
                               "이름을 쓸지 묻거나 한쪽을 다른 이름으로 rename 하게 하세요")

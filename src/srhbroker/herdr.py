@@ -91,6 +91,15 @@ class Herdr:
             return None
         return next((a for a in self.agents() if (a.get("agent_session") or {}).get("value") == native_id), None)
 
+    def pane_session(self, pane_id: str | None, agent: str | None = None) -> str | None:
+        """창에서 지금 실행 중인 에이전트의 세션 ID. 창 안에서 /resume 하면 SessionStart hook 이 바꿔 준다."""
+        if not pane_id:
+            return None
+        a = next((x for x in self.agents() if x.get("pane_id") == pane_id), None)
+        if not a or (agent and a.get("agent") and a.get("agent") != agent):
+            return None
+        return (a.get("agent_session") or {}).get("value")
+
     def at_menu(self, pane_id: str) -> bool:
         """창이 번호 선택 화면이면 True (그때는 넣지 않는다).
         화면의 맨 아래 입력 표시줄(›·❯)만 본다: 평소에는 입력칸, 메뉴가 떠 있으면 선택된 '1.' 항목이다.
