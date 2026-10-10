@@ -131,6 +131,9 @@ class _Panes:
     def find(self, native_id):
         return {"pane_id": f"p-{native_id}", "agent_status": "idle"} if native_id in self.open else None
 
+    def agents(self):
+        return [{**self.find(sid), "agent_session": {"value": sid}} for sid in self.open]
+
 
 X_OLD = "01a10176-5d77-7511-82a3-8a09b17e7593"
 X_NEW = "01a1205d-501a-7bd1-8d98-2d3a20d21c0c"
@@ -407,8 +410,8 @@ class _PaneHerdr:
     def available(self):
         return True
 
-    def pane_session(self, pane, agent=None):
-        return self.sid if pane == "wR:p1" else None
+    def pane(self, pane):
+        return self.agents()[0] if pane == "wR:p1" else None
 
     def agents(self):
         return [{"pane_id": "wR:p1", "agent": "claude", "agent_session": {"value": self.sid}}]
@@ -447,6 +450,36 @@ async def test_mcp_finds_resumed_session_from_transcript_outside_herdr(mcp_nb, h
     async with Client(mcp_server.mcp) as c:
         who = _data(await c.call_tool("whoami", {}))
         assert (who["self"], who["native_id"], who["native_id_source"]) == ("project-lead", C_ID, "claude:transcript")
+
+
+class _HijackedPane(_PaneHerdr):
+    """창 wR:p1 화면은 project-lead 인데(창 제목), 그 창에서 띄운 백그라운드 세션(sid)이 herdr 짝을 가져갔다."""
+
+    def agents(self):
+        return [{"pane_id": "wR:p1", "agent": "claude", "terminal_title_stripped": "Project Lead",
+                 "agent_session": {"value": self.sid}}]
+
+
+async def test_mcp_in_hijacked_pane_does_not_take_other_sessions_identity(mcp_nb, homes, monkeypatch):
+    ch, _ = homes
+    _claude_session(ch, C_ID2, r"D:\kb", "kb")
+    mcp_nb.register_native(C_ID)
+    mcp_nb.register_native(C_ID2)                                     # 백그라운드 세션 kb
+    mcp_nb.herdr = _HijackedPane(C_ID2)
+    monkeypatch.setenv("HERDR_PANE_ID", "wR:p1")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "11111111-runtime-of-project-lead-0000000")
+    monkeypatch.setattr(mcp_server, "_PANE_CACHE", {})
+    monkeypatch.setattr(mcp_server, "_TRANSCRIPT_CACHE", {})
+    async with Client(mcp_server.mcp) as c:
+        who = _data(await c.call_tool("whoami", {}))
+        assert who["self"] is None and who["native_id_source"] == "claude:CLAUDE_CODE_SESSION_ID"   # kb 로 착각하지 않음
+    line = {"type": "assistant", "session_id": "11111111-runtime-of-project-lead-0000000", "sessionId": C_ID}
+    with (ch / "projects" / "D--proj" / f"{C_ID}.jsonl").open("a", encoding="utf-8") as f:
+        f.write(json.dumps(line, separators=(",", ":")) + "\n")
+    monkeypatch.setattr(mcp_server, "_TRANSCRIPT_CACHE", {})
+    async with Client(mcp_server.mcp) as c:
+        who = _data(await c.call_tool("whoami", {}))
+        assert (who["self"], who["native_id_source"]) == ("project-lead", "claude:transcript")
 
 
 def test_reconnect_by_name_picks_latest_session_with_same_rename(nb, homes):

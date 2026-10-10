@@ -307,8 +307,8 @@ def test_same_pane(agent, ok):
 
 
 async def test_pane_mismatch_is_not_pushed(hb):
-    real_find = hb.herdr.find
-    hb.herdr.find = lambda sid: {**real_find(sid), "agent": "claude"} if real_find(sid) else None  # dev 는 codex
+    real_agents = hb.herdr.agents
+    hb.herdr.agents = lambda: [{**a, "agent": "claude"} for a in real_agents()]   # dev 는 codex
     r = await hb.send("작업", sender="lead", to="dev")
     assert r["delivery"] == "pane-mismatch" and hb.herdr.prompts == []
     assert "다시 열어" in r["delivery_note"]
@@ -354,3 +354,57 @@ def test_status_command_runs_read_only(tmp_path, monkeypatch, capsys):
     assert cli.main(["status"]) == 0
     out = capsys.readouterr().out
     assert "데몬: 실행 중 아님" in out and "lead" in out and "사용 불가" in out
+
+
+# ── herdr 짝을 백그라운드 세션이 가져간 경우: 창 제목으로 찾기 ──────────────────
+
+def _hijacked(kb_cwd="D:/kb"):
+    """창 wS:p1 은 plc 세션 화면(제목 plc-lead, 폴더 D:/plc)인데, 그 창에서 띄운 백그라운드 세션 kb 가 짝을 가져갔다."""
+    return [{"pane_id": "wS:p1", "agent": "claude", "agent_status": "idle", "cwd": "D:/plc",
+             "terminal_title_stripped": "plc-lead", "agent_session": {"value": "sid-kb"}}]
+
+
+OWNERS = {"plc-lead": "plc-lead", "kb": "kb"}.get
+
+
+def test_locate_finds_pane_by_title_when_pairing_was_taken():
+    a, how = herdr_mod.locate(_hijacked(), "sid-plc", "claude", "D:/plc", "plc-lead", OWNERS)
+    assert (a["pane_id"], how) == ("wS:p1", "title")
+    a, how = herdr_mod.locate(_hijacked(), "sid-kb", "claude", "D:/kb", "kb", OWNERS)
+    assert (a["pane_id"], how) == ("wS:p1", "mismatch")
+    # 폴더까지 같아도 창 제목이 다른 등록 세션이면 그 창으로 넣지 않는다
+    assert herdr_mod.locate(_hijacked(), "sid-kb", "claude", "D:/plc", "kb", OWNERS)[1] == "mismatch"
+
+
+def test_locate_title_needs_same_kind_folder_and_single_pane():
+    agents = _hijacked()
+    assert herdr_mod.locate(agents, "sid-plc", "claude", "D:/other", "plc-lead", OWNERS) == (None, "none")
+    assert herdr_mod.locate(agents, "sid-plc", "codex", "D:/plc", "plc-lead", OWNERS) == (None, "none")
+    two = agents + [{**agents[0], "pane_id": "wX:p1", "agent_session": {"value": "sid-x"}}]
+    assert herdr_mod.locate(two, "sid-plc", "claude", "D:/plc", "plc-lead", OWNERS) == (None, "none")
+
+
+def test_locate_keeps_id_pairing_when_title_is_unregistered():
+    agents = [{"pane_id": "w1:p1", "agent": "claude", "cwd": "D:/kb", "terminal_title_stripped": "Fix login bug",
+               "agent_session": {"value": "sid-kb"}}]
+    assert herdr_mod.locate(agents, "sid-kb", "claude", "D:/kb", "kb", OWNERS)[1] == "id"
+
+
+class _HijackedHerdr(FakeHerdr):
+    def agents(self):
+        return _hijacked()
+
+
+async def test_delivery_follows_window_title_and_skips_hijacked_pairing(tmp_path, monkeypatch):
+    b = make_broker(tmp_path)
+    b.register("plc-lead", "claude", mode="interactive", native_id="sid-plc", cwd="D:/plc")
+    b.register("kb", "claude", mode="interactive", native_id="sid-kb", cwd="D:/kb")
+    b.register("dev", "codex", mode="interactive", native_id="sid-dev")
+    b.herdr = _HijackedHerdr()
+    monkeypatch.setattr(herdr_mod, "spawn_waiter", lambda name: None)
+    r = await b.send("PLC 로그 요약", sender="dev", to="plc-lead", sandbox="read-only")
+    assert r["delivery"] == "delivered" and b.herdr.prompts[-1][0] == "wS:p1"     # 창 제목으로 찾은 창
+    r = await b.send("KB 검색", sender="dev", to="kb", sandbox="read-only")
+    assert r["delivery"] == "pane-mismatch" and len(b.herdr.prompts) == 1          # 남의 창에 넣지 않음
+    assert "Stop hook" in r["delivery_note"] and b.inbox("kb", mark=False)["incoming"]
+    assert b._native_live(b.store.get_session("plc-lead")) and not b._native_live(b.store.get_session("kb"))

@@ -413,20 +413,21 @@ def _status(b: Any) -> int:
     avail = b.herdr.available()
     print(f"이 셸의 herdr: {'사용 가능' if avail else '사용 불가 (herdr 창 밖)'}")
 
-    by_sid = {(a.get("agent_session") or {}).get("value"): a for a in (b.herdr.agents() if avail else [])}
+    agents = b.herdr.agents() if avail else []
     rows = []
     for s in b.store.list_sessions():
-        a = by_sid.get(s.native_id)
+        a, how = b.locate_pane(s, agents) if avail else (None, "none")
         if s.mode.value != "interactive":
             pane = "(worker)"
         elif not avail:
             pane = "?"
-        elif not a:
+        elif how == "none":
             pane = "닫힘"
-        elif not herdr_mod.same_pane(a, s.provider, s.cwd):
-            pane = f"{a['pane_id']} 짝 불일치"
+        elif how == "mismatch":
+            other = b.title_owner(t) if (t := herdr_mod.title_name(a)) else None
+            pane = f"{a['pane_id']} 짝 불일치" + (f"({other} 창)" if other else "")
         else:
-            pane = f"{a['pane_id']} {a.get('agent_status')}"
+            pane = f"{a['pane_id']} {a.get('agent_status')}" + (" (창 제목)" if how == "title" else "")
         c = b.store.status_counts(s.name)
         rows.append({"name": s.name, "provider": s.provider, "mode": s.mode.value, "창": pane,
                      "받을것": c.get("queued", 0) or "", "처리중": (c.get("delivered", 0) + c.get("running", 0)) or "",
@@ -484,7 +485,8 @@ def _deliver(b: Any, name: str, wait: bool) -> int:
                 print(r)
                 return 0
             s = b.store.get_session(name)
-            agent = b.herdr.find(s.native_id) if s else None
+            agent, how = b.locate_pane(s) if s else (None, "none")
+            agent = agent if how in ("id", "title") else None
             remaining = end - time.monotonic()
             if not agent or remaining <= 0:
                 print("no-pane" if not agent else "timeout")

@@ -296,7 +296,7 @@ function renderAttention() {
   }).join("");
 }
 function node(s) {
-  const st = s.pane_state === "open" ? s.agent_status : {closed:"창 닫힘", mismatch:"짝 불일치", unknown:"?", worker:"worker"}[s.pane_state];
+  const st = s.pane_state === "open" ? s.agent_status + (s.pane_by === "title" ? " · 창 제목" : "") : {closed:"창 닫힘", mismatch:"짝 불일치", unknown:"?", worker:"worker"}[s.pane_state];
   const dot = s.pane_state === "open" ? s.agent_status : "closed";
   const badge = [s.queued ? `받을 것 ${s.queued}` : "", s.held ? `승인 대기 ${s.held}` : ""].filter(Boolean).join(" · ");
   return `<button class="node ${esc(s.provider)} ${s.pane_state === "closed" ? "closed" : ""} ${s.pane_state === "mismatch" ? "mismatch" : ""}"` +

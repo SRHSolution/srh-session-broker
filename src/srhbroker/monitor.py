@@ -143,24 +143,20 @@ def snapshot(b: Any, *, task_limit: int = 50, flow_limit: int = 100) -> dict[str
     home = b.cfg.home
     avail = b.herdr.available()
     agents = b.herdr.agents() if avail else []
-    by_sid = {(a.get("agent_session") or {}).get("value"): a for a in agents}
 
     sessions, attention = [], []
     for s in b.store.list_sessions():
-        a = by_sid.get(s.native_id) if s.native_id else None
+        a, how = b.locate_pane(s, agents) if avail else (None, "none")
         if s.mode.value != "interactive":
             state = "worker"
         elif not avail:
             state = "unknown"
-        elif not a:
-            state = "closed"
-        elif not herdr_mod.same_pane(a, s.provider, s.cwd):
-            state = "mismatch"
         else:
-            state = "open"
+            state = {"none": "closed", "mismatch": "mismatch"}.get(how, "open")
         c = b.store.status_counts(s.name)
         row = {"name": s.name, "provider": s.provider, "mode": s.mode.value, "roles": s.roles, "aliases": s.aliases,
                "cwd": s.cwd, "pane_state": state, "pane_id": a["pane_id"] if a else None,
+               "pane_by": how if state == "open" else None,   # id: herdr 짝 / title: 짝이 어긋나 창 제목으로 찾음
                "agent_status": a.get("agent_status") if a else None,
                **{k: c.get(k, 0) for k in ACTIVE}}
         row["queued"] += b.store.direct_queued_count(s.name)   # 같은 provider 직접 전달 대기분 포함
@@ -170,8 +166,12 @@ def snapshot(b: Any, *, task_limit: int = 50, flow_limit: int = 100) -> dict[str
                               "title": f"{s.name} 창이 닫혀 있어 메시지 {row['queued']}건이 대기 중",
                               "detail": "창을 열면(resume) 데몬이 넣습니다."})
         if state == "mismatch":
+            other = b.title_owner(t) if (t := herdr_mod.title_name(a)) else None
+            why = (f"그 창은 '{other}' 세션 창입니다(창 제목). 이 세션은 창 없이(백그라운드 등) 실행 중일 수 있습니다"
+                   if other else "종류·폴더가 다릅니다")
             attention.append({"kind": "mismatch", "session": s.name, "title": f"{s.name}: herdr 창 짝 불일치",
-                              "detail": f"herdr 가 창 {row['pane_id']} 을 이 세션으로 보지만 종류·폴더가 다릅니다. 창을 다시 여세요."})
+                              "detail": f"herdr 가 창 {row['pane_id']} 을 이 세션으로 보지만 {why}. "
+                                        "메시지는 이 세션이 응답을 마칠 때 받습니다. 바로 받게 하려면 자기 창에서 다시 여세요."})
 
     for st, kind in (("held", "approve"), ("needs_routing", "route")):
         for t in b.store.list_tasks(status=st, limit=50):

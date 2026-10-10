@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import heapq
 import json
 import os
 import time
@@ -106,16 +107,29 @@ def find(session_id: str, provider: str | None = None, transcript_path: str | No
     return None
 
 
+def _recent_claude_files(limit: int) -> list[Path]:
+    """최근 수정된 Claude 대화 기록 파일. 수천 개라 scandir 의 캐시된 stat 을 쓴다(Windows 에서 Path.stat 보다 10배 이상 빠름)."""
+    out: list[tuple[float, str]] = []
+    try:
+        with os.scandir(claude_home() / "projects") as projects:
+            for d in projects:
+                if not d.is_dir():
+                    continue
+                with os.scandir(d.path) as files:
+                    out += [(f.stat().st_mtime, f.path) for f in files if f.name.endswith(".jsonl") and f.is_file()]
+    except OSError:
+        return []
+    return [Path(p) for _, p in heapq.nlargest(limit, out)]
+
+
 def claude_current(runtime_id: str, *, limit: int = 20, tail: int = 262144) -> str | None:
     """Claude 프로세스 ID(CLAUDE_CODE_SESSION_ID)로 그 프로세스가 지금 쓰는 대화 기록의 세션 ID 를 찾는다.
     창 안에서 /resume 하면 프로세스 ID 는 그대로이고 기록은 이어 연 세션 파일에 쌓인다. 기록 줄마다
     "session_id"(프로세스) 와 "sessionId"(대화) 가 함께 남으므로, 최근 기록 끝부분에서 그 프로세스 ID 를 찾는다."""
     if not runtime_id:
         return None
-    files = sorted(((p.stat().st_mtime, p) for p in (claude_home() / "projects").glob("*/*.jsonl")),
-                   key=lambda x: -x[0])
     keys = [b'"session_id":' + sep + b'"' + runtime_id.encode() + b'"' for sep in (b"", b" ")]
-    for _, p in files[:limit]:
+    for p in _recent_claude_files(limit):
         try:
             with p.open("rb") as f:
                 f.seek(0, 2)

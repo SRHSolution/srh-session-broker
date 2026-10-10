@@ -275,7 +275,7 @@ srhbroker register --session <세션ID> --name pcb-review   # rename 하지 않�
 
 | | 출처 |
 |---|---|
-| Claude MCP 도구 | 환경 변수 `CLAUDE_CODE_SESSION_ID`. 창 안에서 `/resume` 한 경우 herdr 창의 현재 세션, herdr 밖이면 대화 기록에서 찾은 세션을 우선 |
+| Claude MCP 도구 | 환경 변수 `CLAUDE_CODE_SESSION_ID`로 대화 기록에서 지금 쓰는 대화 세션을 찾음(창 안에서 `/resume` 한 경우 대비). 못 찾으면 herdr 창의 현재 세션(창 제목과 맞을 때) → 환경 변수 |
 | Codex MCP 도구 | 도구 호출 `_meta.threadId` (Codex는 MCP 서버에 세션 ID를 환경 변수로 넘기지 않음) |
 | Stop hook | stdin 의 `session_id` |
 
@@ -295,7 +295,7 @@ srhbroker register --session <세션ID> --name pcb-review   # rename 하지 않�
 - Windows에서 Codex는 hook 명령을 PowerShell로 실행합니다. `"D:\...\srhbroker.exe" hook codex-stop`처럼 **따옴표로 시작하면 ParserError로 `hook exited with code 1`**이 납니다. 공백 없는 경로를 따옴표 없이 쓰세요 (Claude Code는 Git Bash로 실행해 따옴표가 있어도 됩니다).
 - `held`(사람 승인 대기) 작업은 기본적으로 터미널 `srhbroker approve <id>`로 승인합니다. `[broker] allow_mcp_approve = true`이면 세션 안에서 사용자가 승인했을 때 AI가 `approve` 도구로 승인합니다 (설정은 호출마다 다시 읽어 열린 창에도 바로 반영). AI는 작업과 보류 사유를 보여 주고 물은 뒤, 사용자가 대화창에서 한 승인의 말을 `confirmation`에 그대로 적어야 하며 이 말은 라우팅 기록에 남습니다.
 - Codex 는 MCP 도구마다 승인 창을 띄웁니다. 대화형 창이 승인 대기(blocked)에 걸리면 herdr 전달도 멈추므로 `~/.codex/config.toml`에 `[mcp_servers.srhbroker.tools.<도구>] approval_mode = "approve"`로 srhbroker 도구를 자동 승인합니다 (`approve` 포함 — 승인은 Codex 창 대신 대화창의 사용자 답변으로 대신).
-- Claude 는 ID 를 둘 가집니다: 프로세스 ID(환경 변수 `CLAUDE_CODE_SESSION_ID`)와 대화 세션 ID(기록 파일 이름, `claude --resume <ID>`·hook 의 `session_id`). `claude`를 새로 연 뒤 창 안에서 `/resume`으로 다른 대화를 이어 열면 프로세스 ID 는 처음 값에 머물러 둘이 달라집니다 — 이때 세션에게 자기 ID 를 물으면 환경 변수의 프로세스 ID 를 답합니다. broker 등록의 기준은 **대화 세션 ID**이고, MCP 도구는 herdr 창의 현재 세션 → 대화 기록 줄의 `session_id`·`sessionId` 짝 순으로 대화 세션 ID 를 찾습니다(MCP 서버가 이 버전으로 다시 연결된 뒤부터). Stop hook 은 처음부터 대화 세션 ID 를 받습니다.
+- Claude 는 ID 를 둘 가집니다: 프로세스 ID(환경 변수 `CLAUDE_CODE_SESSION_ID`)와 대화 세션 ID(기록 파일 이름, `claude --resume <ID>`·hook 의 `session_id`). `claude`를 새로 연 뒤 창 안에서 `/resume`으로 다른 대화를 이어 열면 프로세스 ID 는 처음 값에 머물러 둘이 달라집니다 — 이때 세션에게 자기 ID 를 물으면 환경 변수의 프로세스 ID 를 답합니다. broker 등록의 기준은 **대화 세션 ID**이고, MCP 도구는 대화 기록 줄의 `session_id`·`sessionId` 짝 → herdr 창의 현재 세션(창 제목과 맞을 때) 순으로 대화 세션 ID 를 찾습니다(MCP 서버가 0.5 이후 버전으로 다시 연결된 뒤부터). MCP 도구를 부르는 순간 그 턴의 기록이 막 쓰이므로 기록 쪽이 가장 정확합니다. Stop hook 은 처음부터 대화 세션 ID 를 받습니다.
 
 #### 문제 해결: 같은 이름인데 세션 ID가 다를 때 (계정 전환·다시 열기)
 증상: 계정 A로 등록한 세션을 계정 B로 로그인해 다시 열었더니 새 세션이 생겼고, 같은 이름으로 rename 했지만 broker 는 예전 세션 ID에 연결돼 있음. 또는 `whoami`의 `self`가 비고 `register()`가 "이 세션의 ID 를 알 수 없습니다"로 실패.
@@ -308,7 +308,10 @@ srhbroker register --session <세션ID> --name pcb-review   # rename 하지 않�
 서로 다른 provider 사이의 broker 메시지를 herdr 창 안에서 쓰면, 받는 세션이 **쉬고 있을 때(idle·done) 받은 메시지를 프롬프트로 바로 넣습니다.** 회신도 보낸 쪽 창에 바로 들어갑니다.
 
 - 창 찾기: `herdr agent list`의 `agent_session.value`(Claude session ID·Codex thread ID) = 등록된 세션 ID. pane ID 는 창을 옮기면 바뀌므로 매번 세션 ID로 찾습니다.
-- 창 짝 검증: herdr 는 창 안의 아무 Claude 프로세스가 SessionStart hook 으로 보고한 세션 ID 로 창을 짝짓습니다. 같은 창에서 다른 세션을 `claude -p --resume`으로 띄우면 짝이 바뀝니다. 그래서 worker 실행 시 `HERDR_*`를 넘기지 않고, 넣기 전에 창의 에이전트 종류·작업 폴더가 세션과 같은지 확인합니다 (다르면 `pane-mismatch`로 넣지 않음).
+- 창 짝 검증: herdr 는 창 안의 아무 Claude 프로세스가 SessionStart hook 으로 보고한 세션 ID 로 창을 짝짓습니다. 같은 창에서 다른 세션을 `claude -p --resume`이나 **백그라운드 세션**으로 띄우면 그 세션이 짝을 가져갑니다(원래 세션은 창을 잃고, 새 세션은 남의 창과 짝지어짐). 그래서 worker 실행 시 `HERDR_*`를 넘기지 않고, 넣기 전에 창을 확인합니다.
+  - herdr 짝 창의 에이전트 종류·작업 폴더가 세션과 같고, **창 제목**(Claude 는 세션 이름을 창 제목으로 씀)이 다른 등록 세션 이름이 아니면 그 창에 넣습니다.
+  - 짝이 없거나 어긋났으면 **창 제목이 이 세션 이름**이고 종류·폴더가 같은 창이 하나뿐일 때 그 창에 넣습니다. `status`에는 `(창 제목)`, `watch`에는 `*`, 대시보드에는 `창 제목`으로 표시됩니다.
+  - 그래도 못 찾으면 `짝 불일치`(`pane-mismatch`)로 넣지 않습니다. 메시지는 그 세션이 응답을 마칠 때 Stop hook 으로 받고, 바로 받게 하려면 자기 창에서 다시 엽니다. `status`는 그 창의 실제 주인을 `짝 불일치(<세션> 창)`으로 보여 줍니다.
 - `send` 결과의 `delivery_note`: 받는 창이 닫힘(`no-pane`)·짝 불일치·herdr 밖 등을 보낸 세션이 사용자에게 알리도록 설명합니다.
 - **알림은 기다리지 않습니다**: 행동을 요구하지 않는 알림(`kind='message'`)은 받는 창이 닫혀 있으면(`no-pane`) 대기열에 두지 않고 바로 소멸합니다(`delivery: dropped`, broker 작업은 `cancelled`, 직접 전달은 `dropped`, 타임라인 단계 "소멸"). 기다리던 알림도 그 사이 창이 닫히면 데몬이 볼 때 소멸합니다. 작업(`task`)·회신은 지금처럼 창이 열릴 때까지 기다립니다. herdr 밖이라 창 상태를 모르면 버리지 않습니다. 끄려면 `[herdr] drop_notices_when_closed = false`.
 - 받는 창이 **작업 중(working)이어도 바로 넣습니다** (`push_while_working`, 기본 켬). Claude 는 작업 중 입력을 진행 중인 턴에 반영하고, Codex 는 steer 로 끼워 넣습니다 (둘 다 실험으로 확인). 안내문은 "지금 작업과 관련 있으면 바로 반영, 아니면 끝난 뒤 처리"입니다.

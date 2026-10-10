@@ -32,7 +32,8 @@ DELIVERY_NOTES = {
     "busy": "받는 창이 승인·질문 화면이라 지금은 넣을 수 없습니다.",
     "no-pane": "받는 세션의 창이 herdr 에 열려 있지 않습니다. 사용자에게 그 창을 열어 달라고 알리세요 "
                "(열리면 herdr 창에서 실행 중인 srhbroker daemon 이 넣습니다).",
-    "pane-mismatch": "herdr 가 받는 세션을 다른 창과 짝지어 두어 넣지 않았습니다. 사용자에게 받는 세션 창을 "
+    "pane-mismatch": "herdr 가 받는 세션을 다른 세션의 창과 짝지어 두어 넣지 않았습니다(백그라운드로 띄운 세션 등). "
+                     "받는 쪽이 응답을 마칠 때(Stop hook) 받습니다. 바로 받게 하려면 사용자에게 받는 세션을 자기 창에서 "
                      "다시 열어(resume) 달라고 알리세요.",
     "not-herdr": "herdr 창 밖이라 바로 넣지 못했습니다. 받는 쪽이 응답을 마칠 때(Stop hook)나 inbox 로 받습니다.",
     "rate-limited": "짧은 시간에 너무 많이 보내 잠시 멈췄습니다(핑퐁 방지). 받는 쪽은 inbox 로 받을 수 있습니다.",
@@ -212,8 +213,7 @@ class Broker:
     def _native_live(self, s: Session) -> bool:
         """등록된 세션의 창이 지금 열려 있는가. herdr 로 확인하고, herdr 밖이면 최근 10분 안에 기록이 바뀌었는지로 판단."""
         if self.herdr.available():
-            agent = self.herdr.find(s.native_id)
-            return bool(agent) and herdr_mod.same_pane(agent, s.provider, s.cwd)
+            return self.locate_pane(s)[1] in ("id", "title")
         ns = native.find(s.native_id, s.provider) if s.native_id else None
         return bool(ns) and datetime.now().timestamp() - ns.updated < 600
 
@@ -562,17 +562,30 @@ class Broker:
 
     # ── herdr 즉시 전달 ──────────────────────────────────────────────────
 
+    def title_owner(self, title: str) -> str | None:
+        """창 제목(브로커 이름 꼴) → 그 이름·별칭의 등록 세션 이름."""
+        try:
+            r = self.store.resolve_name(title)
+        except BrokerError:
+            return None
+        return r[0].name if r else None
+
+    def locate_pane(self, s: Session, agents: list[dict[str, Any]] | None = None) -> tuple[dict[str, Any] | None, str]:
+        """세션이 떠 있는 herdr 창과 찾은 방법(id | title | mismatch | none). herdr 짝이 어긋나면 창 제목으로 찾는다."""
+        if agents is None:
+            agents = self.herdr.agents()
+        return herdr_mod.locate(agents, s.native_id, s.provider, s.cwd, s.name, self.title_owner)
+
     def _ready_pane(self, s: Session) -> tuple[dict[str, Any] | None, str, bool]:
         """세션이 떠 있는 herdr 창을 찾아 지금 넣어도 되는지 판단한다. (창, 사유, 작업 중 여부)
         사유: ok | not-herdr | no-pane | pane-mismatch | busy | rate-limited"""
         if not self.herdr.available():
             return None, "not-herdr", False
-        agent = self.herdr.find(s.native_id)
-        if not agent:
+        # herdr 의 창 짝(세션 ID)은 다른 프로세스가 가져갈 수 있다 — 종류·폴더·창 제목으로 확인하고, 어긋나면 창 제목으로 찾는다
+        agent, how = self.locate_pane(s)
+        if how == "none":
             return None, "no-pane", False
-        # herdr 는 창 안의 아무 Claude 프로세스(SessionStart hook)가 보고한 세션 ID 로 창을 짝짓는다.
-        # 그 창에서 다른 세션을 `claude -p --resume` 으로 띄우면 짝이 바뀐다(실제로 겪음) — 종류·폴더로 한 번 더 확인
-        if not herdr_mod.same_pane(agent, s.provider, s.cwd):
+        if how == "mismatch":
             return agent, "pane-mismatch", False
         hcfg = self.cfg.data.get("herdr", {})
         status = agent.get("agent_status")

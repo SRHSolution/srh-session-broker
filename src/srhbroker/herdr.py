@@ -17,7 +17,10 @@ import re
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from typing import Any
+
+from .models import normalize_name
 
 log = logging.getLogger(__name__)
 
@@ -37,6 +40,33 @@ def same_pane(agent: dict[str, Any], provider: str, cwd: str | None) -> bool:
     if agent.get("agent") and agent["agent"] != provider:
         return False
     return not (cwd and agent.get("cwd")) or _norm_path(cwd) == _norm_path(agent["cwd"])
+
+
+def title_name(agent: dict[str, Any] | None) -> str | None:
+    """창 제목을 브로커 이름 꼴로. Claude 는 세션 이름(rename 이름)을 창 제목으로 쓴다 — 진행 표시(◐)를 뺀 값을 본다."""
+    return normalize_name((agent or {}).get("terminal_title_stripped")) if agent else None
+
+
+def locate(agents: list[dict[str, Any]], native_id: str | None, provider: str, cwd: str | None, name: str,
+           owner: Callable[[str], str | None]) -> tuple[dict[str, Any] | None, str]:
+    """등록된 세션이 떠 있는 창과 찾은 방법. owner 는 창 제목 → 그 이름의 등록 세션 이름.
+    - id      : herdr 짝(세션 ID)이 맞고 종류·폴더가 같으며, 창 제목이 다른 등록 세션 이름이 아님
+    - title   : herdr 짝이 없거나 어긋났지만 창 제목이 이 세션 이름이고 종류·폴더가 같은 창이 하나뿐
+    - mismatch: herdr 가 짝지은 창이 있지만 다른 세션의 창으로 보임 → 넣지 않음
+    - none    : 창 없음
+    herdr 는 창 안의 아무 Claude 프로세스가 시작할 때 보고한 세션 ID 로 창을 짝짓는다. 한 창에서 띄운 백그라운드 세션이나
+    `claude -p --resume` 이 짝을 가져가면(실제로 겪음) 원래 세션은 창을 잃고 새 세션은 남의 창과 짝지어진다."""
+    def owned_by(a: dict[str, Any]) -> str | None:
+        t = title_name(a)
+        return owner(t) if t else None
+
+    paired = next((a for a in agents if native_id and (a.get("agent_session") or {}).get("value") == native_id), None)
+    if paired and same_pane(paired, provider, cwd) and owned_by(paired) in (None, name):
+        return paired, "id"
+    titled = [a for a in agents if a.get("agent") == provider and same_pane(a, provider, cwd) and owned_by(a) == name]
+    if len(titled) == 1:
+        return titled[0], "title"
+    return (paired, "mismatch") if paired else (None, "none")
 
 
 def looks_like_menu(screen: str) -> bool:
@@ -91,14 +121,9 @@ class Herdr:
             return None
         return next((a for a in self.agents() if (a.get("agent_session") or {}).get("value") == native_id), None)
 
-    def pane_session(self, pane_id: str | None, agent: str | None = None) -> str | None:
-        """창에서 지금 실행 중인 에이전트의 세션 ID. 창 안에서 /resume 하면 SessionStart hook 이 바꿔 준다."""
-        if not pane_id:
-            return None
-        a = next((x for x in self.agents() if x.get("pane_id") == pane_id), None)
-        if not a or (agent and a.get("agent") and a.get("agent") != agent):
-            return None
-        return (a.get("agent_session") or {}).get("value")
+    def pane(self, pane_id: str | None) -> dict[str, Any] | None:
+        """창 하나의 에이전트 정보(종류·세션 ID·제목 등). 창 안에서 /resume 하면 SessionStart hook 이 세션 ID 를 바꿔 준다."""
+        return next((x for x in self.agents() if x.get("pane_id") == pane_id), None) if pane_id else None
 
     def at_menu(self, pane_id: str) -> bool:
         """창이 번호 선택 화면이면 True (그때는 넣지 않는다).

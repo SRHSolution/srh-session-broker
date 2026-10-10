@@ -109,11 +109,13 @@ def render(snap: dict[str, Any], flow_filter: str | None = None, cols: int = 120
                    + fit("승인대기", 9) + "역할", "dim"))
     for s in snap["sessions"]:
         mark, c = _PANE[s["pane_state"]]
-        pane = {"open": f"{s['pane_id']} {s['agent_status']}", "closed": "닫힘", "mismatch": f"{s['pane_id']} 불일치",
+        pane = {"open": f"{s['pane_id']} {s['agent_status']}" + ("*" if s.get("pane_by") == "title" else ""), "closed": "닫힘", "mismatch": f"{s['pane_id']} 불일치",
                 "unknown": "?", "worker": "worker"}[s["pane_state"]]
         out.append(" " + fit(s["name"], 24) + fit(s["provider"], 8) + col(mark, c) + " " + fit(pane, 16)
                    + fit(s["queued"] or "", 7) + fit((s["delivered"] + s["running"]) or "", 7)
                    + fit(s["held"] or "", 9) + ",".join(s["roles"]))
+    if any(s.get("pane_by") == "title" for s in snap["sessions"]):
+        out.append(col("  * herdr 짝이 어긋나 창 제목으로 찾은 창", "dim"))
     out.append("")
 
     flows = [f for f in snap["flows"] if not flow_filter or f["transport"] == flow_filter]
