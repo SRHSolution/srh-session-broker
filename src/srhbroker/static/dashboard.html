@@ -183,6 +183,7 @@ details.raw summary { cursor: pointer; color: var(--muted); font-size: 12px; mar
 <section class="attention" id="attention" hidden>
   <h2 id="att-title">사람이 처리할 것</h2>
   <ul id="todo"></ul>
+  <datalist id="route-targets"></datalist>
 </section>
 
 <div class="shell">
@@ -243,6 +244,7 @@ const store = { get(k, d) { try { return JSON.parse(localStorage.getItem("srhb-"
                 set(k, v) { try { localStorage.setItem("srhb-" + k, JSON.stringify(v)); } catch {} } };
 const F = Object.assign({ q: "", kind: "", status: "", since: "24", session: "", mates: false }, store.get("filters", {}));
 let snap = null, flows = [], limit = 100, selected = null, armed = null, typing = null;
+const routeDraft = {};   // 대상 미정 작업 id → 입력 중인 대상. 4초 새로고침으로 목록을 다시 그려도 유지
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -287,13 +289,16 @@ function renderAttention() {
       const id = esc(a.task_id);
       acts = `<button class="btn" data-open="${id}">내용 보기</button>`;
       if (a.kind === "approve") acts += `<button class="btn primary" data-act="approve" data-id="${id}">승인</button>`;
-      if (a.kind === "route") acts += `<input class="route-in" data-route-in="${id}" placeholder="보낼 세션·역할" aria-label="보낼 대상"><button class="btn primary" data-act="route" data-id="${id}">보내기</button>`;
+      if (a.kind === "route") acts += `<input class="route-in" data-route-in="${id}" value="${esc(routeDraft[a.task_id] || "")}" list="route-targets" placeholder="보낼 세션·역할" aria-label="보낼 대상" autocomplete="off"><button class="btn primary" data-act="route" data-id="${id}">보내기</button>`;
       if (a.kind === "approve" || a.kind === "route") acts += `<button class="btn" data-act="cancel" data-id="${id}">취소</button>`;
       acts = `<div class="acts">${acts}</div>`;
     }
     return `<li class="${esc(a.kind)}"><div class="kind">${esc(KIND[a.kind] || a.kind)}${a.age_s != null ? " · " + ago(new Date(Date.now() - a.age_s*1000).toISOString()) : ""}</div>` +
       `<div class="t">${esc(a.title)}</div><div class="d">${who}${a.detail ? " — " + esc(a.detail) : ""}</div>${acts}</li>`;
   }).join("");
+  for (const k of Object.keys(routeDraft)) if (!items.some(a => a.task_id === k)) delete routeDraft[k];
+  const opts = [...new Set(snap.sessions.flatMap(x => [x.name, ...(x.roles || [])]))].map(v => `<option value="${esc(v)}">`).join("");
+  if ($("route-targets").innerHTML !== opts) $("route-targets").innerHTML = opts;
 }
 function node(s) {
   const st = s.pane_state === "open" ? s.agent_status + (s.pane_by === "title" ? " · 창 제목" : "") : {closed:"창 닫힘", mismatch:"짝 불일치", unknown:"?", worker:"worker"}[s.pane_state];
@@ -373,7 +378,8 @@ async function refresh() {
     $("engine").innerHTML = engineLine(snap.daemon) + (snap.update && snap.update.available
       ? ` · <span class="upd" title="터미널에서 srhbroker update 로 올립니다">새 버전 <b>${esc(snap.update.latest)}</b> — srhbroker update</span>` : "");
     $("clock").textContent = `${new Date().toLocaleTimeString("ko-KR")} 갱신`;
-    renderAttention(); renderSessions();
+    if (!document.activeElement?.matches?.(".route-in")) renderAttention();
+    renderSessions();
   } catch (err) { $("engine").innerHTML = `<span class="bad">불러오지 못했습니다: ${esc(err.message)}</span> — srhbroker dashboard 가 실행 중인지, 출력된 주소로 열었는지 확인하세요.`; return; }
   await loadFlows();
 }
@@ -422,8 +428,8 @@ async function act(btn) {
     btn.classList.add("arm"); armed.timer = setTimeout(disarm, 4000); return; }
   disarm();
   const body = {task_id: id};
-  if (what === "route") { body.to = document.querySelector(`[data-route-in="${CSS.escape(id)}"]`)?.value.trim(); if (!body.to) { toast("보낼 세션이나 역할을 입력하세요"); return; } }
-  try { const r = await api(`/api/${what}`, body); toast(`${label}했습니다: ${id}${r.to ? " → " + r.to : ""}`); if (selected === id) openDetail(id); }
+  if (what === "route") { body.to = (document.querySelector(`[data-route-in="${CSS.escape(id)}"]`)?.value || routeDraft[id] || "").trim(); if (!body.to) { toast("보낼 세션이나 역할을 입력하세요"); return; } }
+  try { const r = await api(`/api/${what}`, body); toast(`${label}했습니다: ${id}${r.to ? " → " + r.to : ""}`); delete routeDraft[id]; if (selected === id) openDetail(id); }
   catch (err) { toast(`${label}하지 못했습니다: ${err.message}`); }
   refresh();
 }
@@ -435,6 +441,7 @@ document.addEventListener("click", e => {
   const c = e.target.closest(".chip"); if (c) return setFilter({ kind: c.dataset.kind });
   const n = e.target.closest(".node"); if (n) return setFilter({ session: F.session === n.dataset.session ? "" : n.dataset.session });
 });
+document.addEventListener("input", e => { if (e.target.matches?.(".route-in")) routeDraft[e.target.dataset.routeIn] = e.target.value; });
 $("q").addEventListener("input", e => { F.q = e.target.value; clearTimeout(typing); typing = setTimeout(() => { typing = null; setFilter({}); }, 300); });
 $("f-status").addEventListener("change", e => setFilter({ status: e.target.value }));
 $("f-since").addEventListener("change", e => setFilter({ since: e.target.value }));
@@ -445,6 +452,8 @@ $("reset").addEventListener("click", () => setFilter({ ...DEFAULTS }));
 $("close").addEventListener("click", closeDetail);
 document.addEventListener("keydown", e => {
   if (e.key === "/" && !e.target.matches("input, select, textarea")) { e.preventDefault(); $("q").focus(); return; }
+  if (e.key === "Enter" && e.target.matches?.(".route-in") && !e.isComposing) {   // Enter = 보내기 (확인을 위해 한 번 더)
+    e.preventDefault(); const b = e.target.parentElement.querySelector('[data-act="route"]'); if (b) act(b); return; }
   if (e.key === "Escape") { disarm(); if (document.activeElement === $("q") && F.q) { setFilter({ q: "" }); return; } closeDetail(); return; }
   const row = e.target.closest?.(".row");
   if (row && e.key === "Enter") return openDetail(row.dataset.open);
