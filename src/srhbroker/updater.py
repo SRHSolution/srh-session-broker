@@ -249,7 +249,8 @@ def select_env_processes(rows: list[dict[str, Any]], prefix: str, me: set[int]) 
         pid, cmd = p["ProcessId"], (p.get("CommandLine") or "")
         if pid in me or not (pid in env_pids or (pid in parents and norm(p).endswith("srhbroker.exe"))):
             continue
-        kind = next((k for k in ("daemon", "dashboard", "watch", "mcp", "hook", "deliver", "update") if f" {k}" in cmd), "기타")
+        kind = next((k for k in ("plugin", "daemon", "dashboard", "watch", "mcp", "hook", "deliver", "update")
+                     if f" {k}" in cmd), "기타")
         out.append({"pid": pid, "kind": kind, "cmd": cmd[:160]})
     return out
 
@@ -299,8 +300,21 @@ def _post_steps(exe: str) -> list[list[str]]:
     return [[exe, "setup", "codex", "--apply"]] if _codex_has_broker() else []
 
 
+def relaunch_command(herdr: str, d: dict[str, Any]) -> list[str] | None:
+    """멈춘 데몬을 같은 방식으로 다시 띄우는 herdr 명령.
+    herdr 플러그인 엔진 탭은 데몬이 끝나면 창도 닫히므로 엔진 탭을 새로 열고, 셸 창이면 그 창에 명령을 넣는다."""
+    if d.get("plugin"):
+        from .plugin import ENGINE, pane_open_cmd
+        return pane_open_cmd(herdr, ENGINE, "tab", plugin=d["plugin"], workspace=d.get("herdr_workspace"),
+                             env={"SRHBROKER_HOME": d["home_env"]} if d.get("home_env") else None)
+    if d.get("herdr_pane"):
+        return [herdr, "pane", "run", d["herdr_pane"], "srhbroker daemon"]
+    return None
+
+
 def restart_daemon(b: Any, out: Callable[[str], None]) -> None:
-    """herdr 창에서 돌던 데몬을 그 창에서 다시 띄운다. 실행 중인 worker 작업이 있으면 하지 않는다."""
+    """herdr 창에서 돌던 데몬을 새 코드로 다시 띄운다 (셸 창은 그 창에서, 플러그인 엔진 탭은 새 엔진 탭으로).
+    실행 중인 worker 작업이 있으면 하지 않는다."""
     from .dispatcher import SingleInstance
     from .monitor import daemon_state
     from .models import TaskStatus
@@ -315,6 +329,7 @@ def restart_daemon(b: Any, out: Callable[[str], None]) -> None:
         out(f"! 실행 중인 worker 작업이 있어 데몬을 재시작하지 않았습니다 — 끝난 뒤 창 {pane} 에서 다시 띄우세요")
         return
     herdr = b.herdr.binary()
+    relaunch = relaunch_command(herdr, d)
     old_pid = d.get("pid")
     subprocess.run([herdr, "pane", "send-keys", pane, "ctrl+c"], capture_output=True)
     for _ in range(20):
@@ -326,14 +341,19 @@ def restart_daemon(b: Any, out: Callable[[str], None]) -> None:
     # 잠금이 풀린 직후에는 셸이 아직 프롬프트로 돌아오지 않아 입력이 사라질 수 있다(실측) — 기다렸다 넣고, 떴는지 확인한다
     for attempt in range(2):
         time.sleep(2.0 + attempt * 2)
-        subprocess.run([herdr, "pane", "run", pane, "srhbroker daemon"], capture_output=True)
+        subprocess.run(relaunch, capture_output=True)
         for _ in range(16):
             time.sleep(0.5)
             now = daemon_state(b.cfg.home)
             if now.get("running") and now.get("pid") and now.get("pid") != old_pid:
-                out(f"✔ 데몬을 창 {pane} 에서 새 코드로 다시 띄웠습니다 (pid {now['pid']})")
+                where = f"새 엔진 탭(창 {now.get('herdr_pane')})" if d.get("plugin") else f"창 {pane}"
+                out(f"✔ 데몬을 {where} 에서 새 코드로 다시 띄웠습니다 (pid {now['pid']})")
                 return
-    out(f"! 데몬을 다시 띄우지 못했습니다 — 창 {pane} 에서 srhbroker daemon 을 실행하세요")
+        if d.get("plugin"):
+            break   # 엔진 탭을 두 번 열면 중복 탭이 남는다
+    hint = ("herdr 에서 'Start broker engine' 액션을 실행하세요" if d.get("plugin")
+            else f"창 {pane} 에서 srhbroker daemon 을 실행하세요")
+    out(f"! 데몬을 다시 띄우지 못했습니다 — {hint}")
 
 
 def repo_for(b: Any) -> str:
@@ -406,17 +426,17 @@ def run(b: Any, *, check_only: bool = False, to: str | None = None, stop_all: bo
             out("    srhbroker update --stop-all 로 모두 끝내고 업데이트하세요 (열린 Claude 창은 /mcp 에서 srhbroker 를 다시 연결,")
             out("    Codex 창은 다시 열어야 합니다)")
             return 1
-        daemon_pane = None
+        relaunch = None
         if procs:
             from .monitor import daemon_state
             d = daemon_state(b.cfg.home)
-            daemon_pane = d.get("herdr_pane") if d.get("running") and b.herdr.available() else None
+            relaunch = relaunch_command(b.herdr.binary(), d) if d.get("running") and b.herdr.available() else None
             stop(procs)
             out(f"✔ srhbroker 프로세스 {len(procs)}개를 끝냈습니다")
         log = b.cfg.home / "update.log"
         post = _post_steps(exe)
-        if daemon_pane and restart:
-            post.append([b.herdr.binary(), "pane", "run", daemon_pane, "srhbroker daemon"])
+        if relaunch and restart:
+            post.append(relaunch)
         spawn_deferred(steps, post, log, os.getpid())
         out(f"✔ {target} 설치를 이어서 진행합니다 (이 명령이 끝나면 시작, 기록: {log}).")
         out("  몇 초 뒤 srhbroker doctor 로 버전을 확인하세요.")

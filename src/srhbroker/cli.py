@@ -21,6 +21,7 @@
   srhbroker doctor                    설치·연결 점검 (읽기 전용, 고칠 명령 안내)
   srhbroker demo [--home DIR]         예시(팬텀) 데이터로 watch·대시보드 체험 (실제 데이터와 분리)
   srhbroker update [--check] [--to vX.Y.Z] [--stop-all]   git 배포(저장소 태그)로 업데이트
+  srhbroker plugin <명령>             herdr 플러그인(herdr-plugin.toml)이 부르는 연결부 (startup·engine·dashboard 등)
 """
 
 from __future__ import annotations
@@ -217,11 +218,15 @@ def main(argv: list[str] | None = None) -> int:
     up.add_argument("--stop-all", action="store_true",
                     help="Windows: 설치를 잠그는 srhbroker 프로세스(데몬·대시보드·세션 MCP 서버)를 끝내고 진행")
     up.add_argument("--no-restart", action="store_true", help="업데이트 뒤 데몬을 다시 띄우지 않는다")
+    pl = sub.add_parser("plugin", help="herdr 플러그인(herdr-plugin.toml)이 부르는 연결부")
+    pl.add_argument("action", choices=["startup", "engine", "start-engine", "dashboard", "watch", "show", "output", "run"])
+    pl.add_argument("args", nargs=argparse.REMAINDER, help="show·run: 실행할 srhbroker 명령")
     dm = sub.add_parser("demo")
     dm.add_argument("--home", default=None, help="예시 데이터를 둘 폴더 (기본: 임시 폴더의 srhbroker-demo)")
 
     a = p.parse_args(argv)
-    quiet = a.cmd in ("init", "setup", "doctor", "demo", "update")   # 사람에게 보여 주는 점검·설정 명령은 진행 로그를 숨긴다
+    # 사람에게 보여 주는 점검·설정 명령은 진행 로그를 숨긴다 (플러그인 엔진 탭·창 실행은 데몬 로그를 보여 준다)
+    quiet = a.cmd in ("init", "setup", "doctor", "demo", "update") or (a.cmd == "plugin" and a.action not in ("engine", "run"))
     logging.basicConfig(level=logging.DEBUG if a.verbose else (logging.WARNING if quiet else logging.INFO),
                         format="%(asctime)s %(levelname)s %(message)s", stream=sys.stderr)
     try:
@@ -252,19 +257,9 @@ def _dispatch(a: argparse.Namespace) -> int:
         run()
         return 0
     if a.cmd == "daemon":
-        from .dispatcher import Dispatcher, SingleInstance
-        b = _broker()
-        lock = SingleInstance(b.cfg.home / "daemon.lock")
-        if not lock.acquire():
-            print("오류: 디스패처가 이미 실행 중입니다", file=sys.stderr)
-            return 1
-        try:
-            asyncio.run(Dispatcher(b).run_forever())
-        except KeyboardInterrupt:
-            pass
-        finally:
-            lock.release()
-        return 0
+        return _daemon()
+    if a.cmd == "plugin":
+        return _plugin(a.action, a.args)
     if a.cmd == "deliver":
         return _deliver(_broker(), a.name, a.wait)
     if a.cmd == "status":
@@ -378,6 +373,42 @@ def _dispatch(a: argparse.Namespace) -> int:
     return 0
 
 
+def _daemon() -> int:
+    from .dispatcher import Dispatcher, SingleInstance
+    b = _broker()
+    lock = SingleInstance(b.cfg.home / "daemon.lock")
+    if not lock.acquire():
+        print("오류: 디스패처가 이미 실행 중입니다", file=sys.stderr)
+        return 1
+    try:
+        asyncio.run(Dispatcher(b).run_forever())
+    except KeyboardInterrupt:
+        pass
+    finally:
+        lock.release()
+    return 0
+
+
+def _plugin(action: str, args: list[str]) -> int:
+    """herdr 플러그인 명령 (plugin.py). show·output·run 은 다른 srhbroker 명령을 이 프로세스에서 실행한다."""
+    from . import plugin
+    if action == "startup":
+        return plugin.startup(_broker())
+    if action == "engine":
+        return plugin.engine(_daemon)
+    if action == "start-engine":
+        return plugin.start_engine(_broker())
+    if action == "dashboard":
+        return plugin.dashboard(_broker())
+    if action == "watch":
+        return plugin.watch()
+    if action == "show":
+        return plugin.show(args)
+    if action == "output":
+        return plugin.output(main)
+    return plugin.run(main, args)
+
+
 def _ago(ts: float | None) -> str:
     if not ts:
         return "?"
@@ -401,12 +432,13 @@ def _status(b: Any) -> int:
     print(f"브로커 홈: {home}")
     if not running:
         print("데몬: 실행 중 아님 — herdr 창 하나에서 `srhbroker daemon` 을 띄우세요 "
-              "(worker 실행, 밀린 메시지 전달, 오래된 대기 작업 만료)")
+              "(herdr 플러그인이면 'Start broker engine' 액션. worker 실행, 밀린 메시지 전달, 오래된 대기 작업 만료)")
     elif not st:
         print("데몬: 실행 중 (이전 버전 — 상태 정보 없음). 재시작하면 herdr 여부·코드 변경 여부가 표시됩니다")
     else:
         print(f"데몬: 실행 중 (pid {st.get('pid')}, 시작 {_ago(st.get('started_at'))}, 마지막 신호 {_ago(st.get('heartbeat'))})")
-        print("  herdr 전달: " + (f"가능 (창 {st.get('herdr_pane')})" if st.get("herdr")
+        pane_note = f"창 {st.get('herdr_pane')}" + (" · 플러그인 엔진 탭" if st.get("plugin") else "")
+        print("  herdr 전달: " + (f"가능 ({pane_note})" if st.get("herdr")
                                   else "불가 — herdr 창 밖에서 실행됨. herdr 창에서 다시 띄우세요"))
         if code_mtime() > float(st.get("code_mtime", 0)) + 1:
             print("  ⚠ 데몬 시작 뒤 코드가 바뀌었습니다 — 재시작하세요 (Ctrl+C 후 `srhbroker daemon`)")

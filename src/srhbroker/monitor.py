@@ -38,6 +38,7 @@ def daemon_state(home: Path) -> dict[str, Any]:
         return {"running": True, "legacy": True}
     return {"running": True, "legacy": False, "pid": st.get("pid"), "started_at": st.get("started_at"),
             "heartbeat": st.get("heartbeat"), "herdr": bool(st.get("herdr")), "herdr_pane": st.get("herdr_pane"),
+            "herdr_workspace": st.get("herdr_workspace"), "plugin": st.get("plugin"), "home_env": st.get("home_env"),
             "restart_needed": code_mtime() > float(st.get("code_mtime", 0)) + 1}
 
 

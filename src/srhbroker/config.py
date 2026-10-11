@@ -97,6 +97,10 @@ DEFAULTS: dict[str, Any] = {
         "check": True,          # 데몬·doctor 가 새 버전을 확인해 watch·대시보드에 알린다
         "check_hours": 12,      # 확인 간격 (그 사이에는 캐시만 읽음)
     },
+    # herdr 플러그인 (herdr-plugin.toml) — herdr 가 켜질 때 데몬이 없으면 엔진 탭을 띄운다
+    "plugin": {
+        "autostart_engine": True,
+    },
     # 관찰 기록(flow_log)·대시보드
     "monitor": {
         "store_body_chars": 2000,  # Claude 직접 메시지 관찰 기록에 남길 본문 길이 (0 이면 본문을 남기지 않음)

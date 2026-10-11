@@ -156,6 +156,10 @@ class Dispatcher:
         """srhbroker status 가 읽는 데몬 상태 (실행 정보·herdr 여부·마지막 신호·시작 시점 코드 시각)."""
         state = {"pid": os.getpid(), "started_at": started, "heartbeat": time.time(),
                  "herdr": self.broker.herdr.available(), "herdr_pane": os.environ.get("HERDR_PANE_ID"),
+                 "herdr_workspace": os.environ.get("HERDR_WORKSPACE_ID"),
+                 # herdr 플러그인 엔진 탭에서 실행 중이면 그 플러그인 id — 업데이트 뒤 같은 방식(엔진 탭)으로 다시 띄운다
+                 "plugin": os.environ.get("HERDR_PLUGIN_ID") if os.environ.get("HERDR_PLUGIN_ENTRYPOINT_ID") == "engine" else None,
+                 "home_env": os.environ.get("SRHBROKER_HOME"),   # 다시 띄울 때 같은 브로커 홈을 넘긴다
                  "code_mtime": code_mtime(), "db": str(self.store.path)}
         try:
             (self.cfg.home / "daemon.json").write_text(json.dumps(state), encoding="utf-8")

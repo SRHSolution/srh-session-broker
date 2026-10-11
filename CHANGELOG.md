@@ -2,6 +2,16 @@
 
 버전은 [유의적 버전](https://semver.org/lang/ko/)을 따릅니다. 0.x 동안에는 기능이 늘면 두 번째 자리, 고치기만 하면 세 번째 자리를 올립니다.
 
+## 0.6.0 — 2026-10-11
+
+### 추가
+- **herdr 플러그인** (`herdr-plugin.toml`, herdr 0.9.0+): `herdr plugin install SRHSolution/srh-session-broker` 로 설치합니다. 설치 단계가 `srhbroker` 를 uv 로 설치하고(같거나 새 버전·소스 checkout·pipx 설치는 그대로, 예전 버전은 `srhbroker update`), herdr 가 켜질 때 엔진(데몬)이 없으면 `srhbroker` 탭에 띄웁니다(`[plugin] autostart_engine`). 액션: 엔진 시작 · 웹 대시보드 열기 · 터미널 대시보드 열기 · 상태 · 설치 점검 · Claude Code 연결 · Codex 연결(결과는 팝업 창). `srhbroker update` 는 엔진 탭에서 돌던 데몬을 새 엔진 탭으로 다시 띄웁니다.
+- 영문 README(herdr 마켓플레이스용)와 사용법 GIF(웹 대시보드 둘러보기·대상 지정·승인, 터미널 대시보드). 한국어 문서는 `README.ko.md`. GIF 는 `scripts/render_gifs.py` 가 예시 데이터로 다시 그립니다.
+
+### 고침
+- Windows 에서 같은 포트에 웹 대시보드를 하나 더 띄우면 둘 다 떠서 요청이 엉뚱한 쪽으로 가던 문제. 포트를 독점해 두 번째 실행은 "이미 대시보드가 떠 있거나 다른 프로그램이 씁니다" 로 끝납니다.
+- 웹 대시보드의 흐름 목록 "더 보기" 버튼이 더 볼 것이 없어도 늘 보이던 문제.
+
 ## 0.5.2 — 2026-10-11
 
 ### 고침

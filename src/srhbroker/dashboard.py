@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import hmac
 import json
+import os
 import secrets
+import socket
 import threading
 import webbrowser
 from http import HTTPStatus
@@ -167,9 +169,25 @@ def _token(home: Any, renew: bool) -> str:
     return t
 
 
+class _Server(ThreadingHTTPServer):
+    """Windows 의 SO_REUSEADDR 는 이미 쓰는 포트에도 bind 를 허용해 대시보드가 같은 포트에 둘 뜰 수 있다(실측).
+    Windows 에서는 독점 bind 로 두 번째 실행이 실패하게 한다."""
+    allow_reuse_address = os.name != "nt"
+
+    def server_bind(self) -> None:
+        if os.name == "nt" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
 def serve(b: Any, port: int = 8765, open_browser: bool = False, new_token: bool = False) -> int:
     token = _token(b.cfg.home, new_token)
-    httpd = ThreadingHTTPServer(("127.0.0.1", port), make_handler(b, token, port))
+    try:
+        httpd = _Server(("127.0.0.1", port), make_handler(b, token, port))
+    except OSError as e:
+        print(f"오류: 127.0.0.1:{port} 를 열 수 없습니다 — 이미 대시보드가 떠 있거나 다른 프로그램이 씁니다 ({e}). "
+              f"떠 있는 대시보드는 http://127.0.0.1:{port}/ 로 열고, 다른 포트는 --port 로 지정하세요")
+        return 1
     url = f"http://127.0.0.1:{port}/?t={token}"
     print(f"Session Broker Dashboard: {url}\n(이 주소로 한 번 열면 그 브라우저는 30일 동안 기억해 새로고침·새 탭은 "
           f"http://127.0.0.1:{port}/ 로 열립니다. 재시작해도 같은 주소 — 바꾸려면 --new-token. Ctrl+C 로 종료)", flush=True)

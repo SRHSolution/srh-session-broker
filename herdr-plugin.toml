@@ -1,0 +1,87 @@
+# herdr plugin manifest — https://herdr.dev/docs/plugins/
+# Install:  herdr plugin install SRHSolution/srh-session-broker
+# The build step installs the `srhbroker` CLI with uv (keeps a newer or source install as is).
+# Everything else calls `srhbroker plugin <command>` (src/srhbroker/plugin.py).
+
+id = "srhbroker"
+name = "SRH Session Broker"
+version = "0.6.0"
+min_herdr_version = "0.9.0"
+description = "Claude Code and Codex sessions hand work to each other by name: messages land in the receiving pane, replies come back, risky work waits for your approval. Terminal and web dashboards."
+platforms = ["windows", "macos", "linux"]
+
+[[build]]
+command = ["uv", "run", "--script", "scripts/herdr_plugin_build.py"]
+
+# Starts the broker engine in its own tab when herdr starts, unless it is already running.
+# Turn off with `[plugin] autostart_engine = false` in ~/.srhbroker/config.toml.
+[[startup]]
+command = ["srhbroker", "plugin", "startup"]
+
+[[actions]]
+id = "start-engine"
+title = "Start broker engine"
+contexts = ["global"]
+command = ["srhbroker", "plugin", "start-engine"]
+
+[[actions]]
+id = "dashboard"
+title = "Open broker web dashboard"
+contexts = ["global"]
+command = ["srhbroker", "plugin", "dashboard"]
+
+[[actions]]
+id = "watch"
+title = "Open broker terminal dashboard"
+contexts = ["global"]
+command = ["srhbroker", "plugin", "watch"]
+
+[[actions]]
+id = "status"
+title = "Broker status"
+contexts = ["global"]
+command = ["srhbroker", "plugin", "show", "status"]
+
+[[actions]]
+id = "doctor"
+title = "Check broker setup"
+contexts = ["global"]
+command = ["srhbroker", "plugin", "show", "doctor"]
+
+[[actions]]
+id = "connect-claude"
+title = "Connect Claude Code to the broker"
+contexts = ["global"]
+command = ["srhbroker", "plugin", "show", "setup", "claude", "--apply"]
+
+[[actions]]
+id = "connect-codex"
+title = "Connect Codex to the broker"
+contexts = ["global"]
+command = ["srhbroker", "plugin", "show", "setup", "codex", "--apply"]
+
+[[panes]]
+id = "engine"
+title = "SRH Broker engine"
+placement = "tab"
+command = ["srhbroker", "plugin", "engine"]
+
+[[panes]]
+id = "dashboard"
+title = "SRH Broker web dashboard"
+placement = "tab"
+command = ["srhbroker", "plugin", "run", "dashboard", "--open"]
+
+[[panes]]
+id = "watch"
+title = "SRH Broker watch"
+placement = "split"
+command = ["srhbroker", "plugin", "run", "watch"]
+
+[[panes]]
+id = "output"
+title = "SRH Broker"
+placement = "popup"
+width = "80%"
+height = "80%"
+command = ["srhbroker", "plugin", "output"]
