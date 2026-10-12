@@ -50,9 +50,42 @@ herdr plugin install SRHSolution/srh-session-broker
 
 - herdr 0.9.0 이상과 [uv](https://docs.astral.sh/uv/) 가 필요합니다. 설치 단계(build)가 `srhbroker` 명령을 uv 로 설치하고(같거나 새 버전·소스 checkout·pipx 설치는 그대로 둠, 예전 버전이면 `srhbroker update`), `~/.srhbroker/config.toml` 을 만듭니다.
 - Windows 에서 예전 버전 srhbroker 가 실행 중이면 설치가 잠겨 멈춥니다 → `srhbroker update --stop-all` 후 다시 설치합니다.
-- herdr 액션: **Start broker engine**(엔진 탭) · **Open broker web dashboard** · **Open broker terminal dashboard** · **Broker status** · **Check broker setup**(doctor) · **Connect Claude Code to the broker** · **Connect Codex to the broker**(setup --apply). 결과는 팝업 창에 나옵니다.
-- herdr 가 켜질 때 엔진(데몬)이 없으면 `srhbroker` 탭에 띄웁니다. 끄려면 `[plugin] autostart_engine = false`. 탭을 닫으면 엔진도 멈추고, `srhbroker update` 는 새 엔진 탭으로 다시 띄웁니다.
-- 처음에는 Connect 액션 두 개 → Check broker setup → 각 세션에서 `/rename` 후 "broker에 이 세션 등록해줘" 순서로 하면 됩니다. 아래는 플러그인 없이 직접 설치하는 방법입니다.
+- herdr 에는 아직 플러그인 액션을 고르는 메뉴가 없습니다. herdr 창에서 `herdr plugin action invoke srhbroker.<액션>` 으로 실행하거나, 아래처럼 키에 묶어 씁니다. 팝업은 Enter 로 닫힙니다.
+
+| 액션 | 하는 일 |
+|---|---|
+| `start-engine` | [엔진](#3-엔진-띄우기)을 `srhbroker` 탭에 띄움. 이미 돌고 있으면 알림만 |
+| `dashboard` | 웹 대시보드를 브라우저로 엶 (떠 있지 않으면 `broker web` 탭에 먼저 띄움) |
+| `watch` | 터미널 대시보드(`srhbroker watch`)를 옆 창으로 |
+| `status` | 엔진·herdr·세션별 창·대기 작업을 팝업으로 |
+| `doctor` | 설치 점검(`srhbroker doctor`)을 팝업으로 |
+| `connect-claude` · `connect-codex` | `srhbroker setup claude --apply` · `setup codex --apply` |
+
+키에 묶으려면 herdr 의 `config.toml`(`~/.config/herdr/config.toml`, Windows 는 `%APPDATA%\herdr\config.toml`)에 넣은 뒤 `prefix+shift+r` 또는 `herdr server reload-config` 로 설정을 다시 읽게 합니다. 기본 prefix 는 `ctrl+b` 이고, 기본 키 중에 `prefix+alt` 조합은 없습니다(`prefix+?` 로 확인).
+
+```toml
+[[keys.command]]
+key = "prefix+alt+e"
+type = "plugin_action"
+command = "srhbroker.start-engine"
+description = "broker: start engine"
+
+[[keys.command]]
+key = "prefix+alt+d"
+type = "plugin_action"
+command = "srhbroker.dashboard"
+description = "broker: web dashboard"
+```
+
+처음 설치한 뒤에는 herdr 창에서 이 순서로 합니다.
+
+```sh
+herdr plugin action invoke srhbroker.connect-claude   # Claude Code 연결 (Codex 는 connect-codex)
+herdr plugin action invoke srhbroker.start-engine     # 엔진 시작 — 설치 직후에는 아직 안 떠 있습니다
+herdr plugin action invoke srhbroker.doctor           # 점검
+```
+
+그다음 각 세션에서 `/rename` 후 "broker에 이 세션 등록해줘" 라고 하면 됩니다. 아래는 플러그인 없이 직접 설치하는 방법입니다.
 
 ### 준비물
 
@@ -104,13 +137,30 @@ srhbroker doctor                 # 빠진 것과 고칠 명령을 보여 줍니�
 export TYPESAFE_API_KEY="<키>"                                              # macOS·Linux (셸 설정 파일에)
 ```
 
-### 3) 데몬 띄우기
+### 3) 엔진 띄우기
 
-```powershell
-srhbroker daemon     # herdr 창 하나(또는 터미널)에 띄워 둡니다
-```
+엔진은 `srhbroker daemon` 입니다. 플러그인으로 설치했든 직접 설치했든 같은 프로그램이고, PC 당 하나만 돕니다. 엔진이 하는 일은 이렇습니다.
 
-데몬은 worker 세션 실행, 밀린 메시지 전달, 오래된 대기 작업 정리를 맡습니다. PC 당 하나만 실행됩니다.
+- worker 세션의 작업 실행
+- 받는 창이 닫혀 있어 기다리던 작업·회신을 그 창이 열리면 넣기 (1초 간격으로 확인)
+- `held`·`needs_routing`·`queued` 로 `[broker] stale_after_s`(기본 24시간)보다 오래 머문 작업 만료
+- 새 버전 확인
+
+이미 열려 있는 창으로 가는 메시지는 보내는 세션이 직접 넣으므로 엔진이 꺼져 있어도 도착합니다. 기다려야 하는 것은 엔진이 있어야 전달됩니다.
+
+| | 플러그인으로 설치 | 직접 설치 |
+|---|---|---|
+| 시작 | herdr 서버가 켜질 때 자동. 지금 띄우려면 `herdr plugin action invoke srhbroker.start-engine` | herdr 창 하나(새 탭 등)에서 `srhbroker daemon` |
+| 실행 위치 | `srhbroker` 탭 | 실행한 그 창 |
+| 멈추기 | 탭을 닫거나 그 탭에서 `ctrl+c` | `ctrl+c` |
+| `srhbroker update` 뒤 | 새 `srhbroker` 탭에서 새 코드로 다시 뜸 | 같은 창에서 새 코드로 다시 뜸 |
+| 확인 | `srhbroker status` | `srhbroker status` |
+
+- **herdr 서버가 켜질 때**: herdr 서버는 터미널을 닫아도 계속 돕니다. 재부팅 뒤나 `herdr server stop` 뒤 처음 `herdr` 를 실행할 때 다시 켜집니다. 플러그인을 설치한 직후에는 이 시점이 지나지 않았으므로 엔진을 한 번 직접 띄워야 합니다. 그때 엔진이 이미 돌고 있으면 탭을 열지 않습니다. 자동 시작을 끄려면 `~/.srhbroker/config.toml` 에 `[plugin]` `autostart_engine = false`.
+- **herdr 창 안에서 띄웁니다**: herdr 밖에서도 worker 실행·만료는 하지만 창에 넣지 못해, 기다리던 메시지는 inbox·Claude Stop hook 으로 받습니다. 이때 `srhbroker status` 에 `herdr 전달: 불가` 로 나옵니다.
+- **하나만 돕니다**: 두 번째 `srhbroker daemon` 은 "디스패처가 이미 실행 중입니다" 로 끝나고, 두 번째 엔진 탭은 스스로 닫힙니다. 플러그인을 설치했어도 `srhbroker daemon` 을 직접 띄워도 되고, 그러면 herdr 는 엔진 탭을 열지 않습니다.
+- `srhbroker plugin start-engine` 은 `start-engine` 액션이 실행하는 명령입니다. herdr 창에서 `herdr plugin action invoke …` 대신 입력해도 같습니다.
+- 엔진이 시작에 실패하면 `srhbroker` 탭이 오류를 보여 준 채 Enter 를 누를 때까지 남아 있습니다.
 
 ### 4) 세션 등록
 
@@ -139,7 +189,7 @@ srhbroker update --to v0.3.0    # 특정 버전으로 (되돌리기 포함)
 ```
 
 - 설치 방식을 알아서 고릅니다: `uv tool`·`pipx` 는 새 태그로 다시 설치하고, 소스 checkout(editable)은 `git pull --ff-only` 합니다.
-- 업데이트 뒤 새 버전에 필요한 설정(Codex 의 새 도구 자동 승인 등)을 적용하고, herdr 창에서 돌던 데몬을 그 창에서 새 코드로 다시 띄웁니다 (실행 중인 worker 작업이 있으면 건너뜀, `--no-restart` 로 끔).
+- 업데이트 뒤 새 버전에 필요한 설정(Codex 의 새 도구 자동 승인 등)을 적용하고, 엔진을 새 코드로 다시 띄웁니다 — 플러그인 엔진 탭은 새 탭에서, 직접 띄운 데몬은 그 창에서 (실행 중인 worker 작업이 있으면 건너뜀, `--no-restart` 로 끔).
 - 데몬이 몇 시간마다 새 버전을 확인해 `watch`·대시보드·`doctor` 에 "새 버전 vX — srhbroker update" 로 알립니다 (`[update] check = false` 로 끔, `repo` 로 포크 지정).
 - **Windows**: 실행 중인 srhbroker(데몬·대시보드·각 세션의 MCP 서버)가 설치 파일을 잠가, 그대로 바꾸면 설치가 깨집니다. `update` 는 이를 감지해 멈추고 무엇이 실행 중인지 보여 줍니다. `--stop-all` 을 주면 그 프로세스들을 끝내고, 설치는 이 명령이 끝난 뒤 별도 프로세스가 이어서 합니다 (기록: `~/.srhbroker/update.log`). 소스 checkout 은 실행 중에도 바로 됩니다.
 - 업데이트 뒤 열려 있던 Claude 창은 `/mcp` 에서 srhbroker 를 다시 연결하고, Codex 창은 다시 열어야 새 도구가 보입니다.

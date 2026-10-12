@@ -57,30 +57,70 @@ herdr shows the commands the plugin will run and asks you to confirm. The build 
 
 ### What the plugin adds
 
-| herdr action | What it does |
-|---|---|
-| **Start broker engine** | Opens the engine in its own tab named `srhbroker`. If the engine is already running, it only tells you so. |
-| **Open broker web dashboard** | Opens the dashboard in your browser, starting it in a `broker web` tab first if needed. |
-| **Open broker terminal dashboard** | Opens `srhbroker watch` in a split next to the current pane. |
-| **Broker status** | Shows the engine, herdr, the pane of each session, and waiting work in a popup. |
-| **Check broker setup** | Runs `srhbroker doctor` in a popup: what is missing and the command that fixes it. |
-| **Connect Claude Code to the broker** | `srhbroker setup claude --apply`: adds the user-scope MCP server and hooks. |
-| **Connect Codex to the broker** | `srhbroker setup codex --apply`: adds the MCP server, forwarded environment variables and tool auto-approval to `~/.codex/config.toml`. |
+herdr has no menu for plugin actions yet. Run an action from any herdr pane with `herdr plugin action invoke srhbroker.<action>`, or [bind it to a key](#bind-actions-to-keys).
 
-The engine also starts by itself when herdr starts, unless it is already running. It runs workers, delivers queued messages and expires stale work, and only one runs per machine. To turn the automatic start off, set this in `~/.srhbroker/config.toml`:
+| Action | What it does |
+|---|---|
+| `start-engine` | Starts the [engine](#running-the-engine) in its own tab named `srhbroker`. If the engine is already running, it only tells you so. |
+| `dashboard` | Opens the web dashboard in your browser, starting it in a `broker web` tab first if needed. |
+| `watch` | Opens the terminal dashboard (`srhbroker watch`) in a split next to the current pane. |
+| `status` | Shows the engine, herdr, the pane of each session, and waiting work in a popup. |
+| `doctor` | Runs `srhbroker doctor` in a popup: what is missing and the command that fixes it. |
+| `connect-claude` | `srhbroker setup claude --apply`: adds the user-scope MCP server and hooks. |
+| `connect-codex` | `srhbroker setup codex --apply`: adds the MCP server, forwarded environment variables and tool auto-approval to `~/.codex/config.toml`. |
+
+Popups close with Enter. The plugin also starts the engine whenever the herdr server starts ([details](#running-the-engine)).
+
+### Bind actions to keys
+
+Add bindings to herdr's `config.toml` (`~/.config/herdr/config.toml`, on Windows `%APPDATA%\herdr\config.toml`), then reload it with `prefix+shift+r` or `herdr server reload-config`. The prefix is `ctrl+b` by default. No default binding uses `prefix+alt`, but check `prefix+?` for your own.
 
 ```toml
-[plugin]
-autostart_engine = false
-```
+[[keys.command]]
+key = "prefix+alt+e"
+type = "plugin_action"
+command = "srhbroker.start-engine"
+description = "broker: start engine"
 
-Closing the `srhbroker` tab stops the engine. `srhbroker update` restarts it in a new tab with the new code.
+[[keys.command]]
+key = "prefix+alt+d"
+type = "plugin_action"
+command = "srhbroker.dashboard"
+description = "broker: web dashboard"
+
+[[keys.command]]
+key = "prefix+alt+w"
+type = "plugin_action"
+command = "srhbroker.watch"
+description = "broker: terminal dashboard"
+
+[[keys.command]]
+key = "prefix+alt+s"
+type = "plugin_action"
+command = "srhbroker.status"
+description = "broker: status"
+```
 
 ### First run
 
-1. Run **Connect Claude Code to the broker** and/or **Connect Codex to the broker**. Both back up the file they change (`*.bak-<time>`) and only add what is missing. Already-open Claude panes pick up the MCP server after `/mcp` → reconnect `srhbroker`. Codex panes need to be reopened.
-2. Run **Check broker setup** and fix anything marked ✖.
-3. Name and register each session. In each Claude Code or Codex pane:
+Run these in any herdr pane:
+
+1. Connect the agents you use. Both commands back up the file they change (`*.bak-<time>`) and only add what is missing.
+
+   ```sh
+   herdr plugin action invoke srhbroker.connect-claude
+   herdr plugin action invoke srhbroker.connect-codex
+   ```
+
+   Already-open Claude panes pick up the MCP server after `/mcp` → reconnect `srhbroker`. Codex panes need to be reopened.
+2. Start the engine. herdr runs the plugin's startup step only when its server starts, so right after installing, the engine is not running yet.
+
+   ```sh
+   herdr plugin action invoke srhbroker.start-engine
+   ```
+
+3. Check the setup with `herdr plugin action invoke srhbroker.doctor` and fix anything marked ✖.
+4. Name and register each session. In each Claude Code or Codex pane:
 
    ```text
    /rename web-codex
@@ -88,7 +128,7 @@ Closing the `srhbroker` tab stops the engine. `srhbroker update` restarts it in 
    ```
 
    The session calls `register()` and is registered under its `/rename` name. If an earlier, now-closed session had the same name, the new one inherits the name and any messages waiting for it.
-4. Try it:
+5. Try it:
 
    ```text
    (in a Claude pane)  Ask api-codex to implement the cart coupon API, then have the reviewer check it
@@ -96,6 +136,36 @@ Closing the `srhbroker` tab stops the engine. `srhbroker update` restarts it in 
    ```
 
 Sessions understand these requests in any language. The examples are just phrasing.
+
+## Running the engine
+
+The engine is `srhbroker daemon`. It is the same program with or without the plugin, and one runs per machine. It:
+
+- runs tasks for `worker` sessions;
+- types in tasks and replies that were waiting for a closed pane, once that pane opens (it checks every second);
+- expires work left in held, needs_routing or queued for longer than `[broker] stale_after_s` (24 hours by default);
+- checks for new releases.
+
+A message to a pane that is already open is typed in by the sending session itself, so it arrives even while the engine is down. Anything that has to wait needs the engine.
+
+| | With the plugin | Without the plugin |
+|---|---|---|
+| Start | Automatic when the herdr server starts. To start it now: `herdr plugin action invoke srhbroker.start-engine` | Run `srhbroker daemon` in a herdr pane of its own, such as a new tab |
+| Runs in | A tab named `srhbroker` | The pane you started it in |
+| Stop | Close the tab, or press `ctrl+c` in it | `ctrl+c` |
+| After `srhbroker update` | Reopened in a new `srhbroker` tab with the new code | Restarted in the same pane with the new code |
+| Check | `srhbroker status` | `srhbroker status` |
+
+- **When the herdr server starts.** The herdr server keeps running after you close the terminal. It starts again with the first `herdr` after a reboot or after `herdr server stop`. If the engine is already running then, no tab is opened. To turn the automatic start off, set this in `~/.srhbroker/config.toml`:
+
+  ```toml
+  [plugin]
+  autostart_engine = false
+  ```
+
+- **Run it inside herdr.** Outside herdr the engine still runs workers and expires stale work, but it cannot type into panes. Waiting messages then arrive through `inbox` and the Claude Stop hook. `srhbroker status` shows `herdr 전달: 불가` (*herdr delivery: unavailable*) in that case.
+- **One engine.** A second `srhbroker daemon` exits with `디스패처가 이미 실행 중입니다` (*already running*), and a second engine tab closes itself. With the plugin installed you can still run `srhbroker daemon` yourself; herdr then sees it running and opens no tab.
+- `srhbroker plugin start-engine` is what the action runs. You can type it in a herdr pane instead of the `herdr plugin action invoke` command.
 
 ## Using it
 
@@ -114,7 +184,7 @@ Sessions understand these requests in any language. The examples are just phrasi
 
 ### Web dashboard
 
-Run **Open broker web dashboard**, or `srhbroker dashboard --open`.
+Run `srhbroker dashboard --open`, or the plugin action `herdr plugin action invoke srhbroker.dashboard`.
 
 **Route a task that has no target.** It waits under "사람이 처리할 것" (*needs you*) until you pick a session or role.
 
@@ -131,7 +201,7 @@ Run **Open broker web dashboard**, or `srhbroker dashboard --open`.
 
 ### Terminal dashboard
 
-Run **Open broker terminal dashboard**, or `srhbroker watch`. Keys: `a` approve · `c` cancel · `t` route · `d` detail · `f` flow filter · `r` refresh · `q` quit. Pick a task by its ID or its `[number]`.
+Run `srhbroker watch`, or the plugin action `srhbroker.watch` to open it in a split. Keys: `a` approve · `c` cancel · `t` route · `d` detail · `f` flow filter · `r` refresh · `q` quit. Pick a task by its ID or its `[number]`.
 
 ![Routing a task from the terminal dashboard](docs/images/watch.gif)
 
@@ -148,7 +218,7 @@ Run **Open broker terminal dashboard**, or `srhbroker watch`. Keys: `a` approve 
 | `srhbroker rename <current> <new>` | Rename a registration. Given a deleted old name, the new session inherits its records. |
 | `srhbroker reconnect <name> [--session <ID>]` | Keep the name and point it at another session ID. Without `--session`, the most recent session with that `/rename` name is used, for example after switching accounts. |
 | `srhbroker watch` · `dashboard [--open] [--port]` | Terminal and web dashboards |
-| `srhbroker daemon` | Run the engine in the current terminal (without the plugin) |
+| `srhbroker daemon` | Run the [engine](#running-the-engine) in the current pane |
 | `srhbroker setup claude\|codex [--apply]` · `init` · `demo` | Connect, initialize, demo data |
 | `srhbroker update [--check] [--to vX.Y.Z] [--stop-all]` · `--version` | Update from the repository's release tags |
 
@@ -228,7 +298,7 @@ Only the AI router talks to an outside service, and only when a key is set. It s
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `[plugin] autostart_engine` | `true` | Start the engine tab when herdr starts |
+| `[plugin] autostart_engine` | `true` | Start the engine tab when the herdr server starts |
 | `[router] mode` | `shadow` | `rules` · `shadow` · `jev` |
 | `[[roles]]` | | `name`, `description`, `preferred_provider` |
 | `[router.hw_rules] extra_targets` | `[]` | Project-specific hardware names for the safety gate |
@@ -257,7 +327,7 @@ srhbroker update --to v0.5.2    # a specific version, including going back
 
 ## Without the plugin
 
-The broker also works without herdr. Messages then arrive through the inbox and the Claude Stop hook instead of being typed into panes.
+Install the CLI yourself and start the [engine](#running-the-engine) by hand. herdr is optional: without it, messages arrive through the inbox and the Claude Stop hook instead of being typed into panes.
 
 ```sh
 uv tool install "srh-session-broker[jev] @ git+https://github.com/SRHSolution/srh-session-broker"
@@ -267,7 +337,7 @@ srhbroker init
 srhbroker setup claude --apply
 srhbroker setup codex --apply
 srhbroker doctor
-srhbroker daemon        # keep it running in a terminal (inside herdr, a pane of its own)
+srhbroker daemon        # the engine: keep it running in a herdr pane of its own
 ```
 
 To try the dashboards without any sessions, run `srhbroker demo`. It builds demo data in a temporary folder and prints how to point `watch` and `dashboard` at it. Your real data is not touched.
@@ -281,6 +351,8 @@ To try the dashboards without any sessions, run `srhbroker demo`. It builds demo
 **`/resume` inside a Claude pane.** Claude has two IDs. One is the process ID (`CLAUDE_CODE_SESSION_ID`); the other is the conversation ID (the transcript name, used by `claude --resume <ID>` and hooks). After an in-pane `/resume` they differ. The broker registers conversation IDs and reads the current one from the transcript, so just reconnect `srhbroker` with `/mcp` in that pane.
 
 **`pane-mismatch`.** Another session took the pane's herdr pairing, and no pane titled with this session's name was found. `srhbroker status` shows who owns the paired pane. Reopen the session in its own pane, or let it receive through the Stop hook.
+
+**The engine is not running** (`srhbroker status` says `데몬: 실행 중 아님`). Start it as shown in [Running the engine](#running-the-engine). If it fails to start, the `srhbroker` tab stays open with the error until you press Enter.
 
 **Plugin actions do nothing.** Check the plugin log with `herdr plugin log list --plugin srhbroker`. The usual cause is `srhbroker` missing from herdr's PATH: run `uv tool update-shell`, then restart herdr.
 

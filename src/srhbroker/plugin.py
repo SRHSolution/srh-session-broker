@@ -33,6 +33,8 @@ PLUGIN_ID = "srhbroker"          # herdr-plugin.toml 의 id
 ENGINE, DASHBOARD, WATCH, OUTPUT = "engine", "dashboard", "watch", "output"   # 창 진입점 id
 ARGS_ENV = "SRHBROKER_PLUGIN_ARGS"
 ENGINE_TAB, DASHBOARD_TAB = "srhbroker", "broker web"
+# herdr 에는 플러그인 액션을 고르는 메뉴가 없다 — 안내는 그대로 입력할 수 있는 명령으로 한다
+START_ENGINE_CMD = f"herdr plugin action invoke {PLUGIN_ID}.start-engine"
 COMMANDS = ("startup", "engine", "start-engine", "dashboard", "watch", "show", "output", "run")
 
 _run: Callable[..., subprocess.CompletedProcess] = subprocess.run   # 테스트에서 바꿔 끼운다

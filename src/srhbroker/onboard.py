@@ -229,9 +229,10 @@ def doctor(b: Any) -> list[dict[str, str]]:
         add("ok", "herdr", f"{herdr}" + (" · 이 셸은 herdr 창 안" if os.environ.get("HERDR_ENV") == "1" else " · 이 셸은 herdr 밖"))
     else:
         add("info", "herdr (선택)", "없음 — 받는 창에 바로 넣기 대신 Stop hook·inbox 로 받습니다", "https://herdr.dev")
+    from .plugin import START_ENGINE_CMD
     d = daemon_state(b.cfg.home)
     add("ok" if d.get("running") else "warn", "데몬", "실행 중" if d.get("running") else "실행 중 아님",
-        "" if d.get("running") else "herdr 창 하나(또는 터미널)에서 srhbroker daemon · herdr 플러그인이면 'Start broker engine' 액션")
+        "" if d.get("running") else f"herdr 창 하나에서 srhbroker daemon · herdr 플러그인이면 {START_ENGINE_CMD}")
     return rows
 
 

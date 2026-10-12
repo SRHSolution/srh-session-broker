@@ -2,6 +2,15 @@
 
 버전은 [유의적 버전](https://semver.org/lang/ko/)을 따릅니다. 0.x 동안에는 기능이 늘면 두 번째 자리, 고치기만 하면 세 번째 자리를 올립니다.
 
+## 0.6.1 — 2026-10-12
+
+### 문서
+- README(영문·한국어)에 **엔진 띄우기** 절: 엔진은 플러그인 여부와 관계없이 `srhbroker daemon` 이고, 플러그인은 herdr 서버가 켜질 때 자동으로 띄우며(설치 직후에는 한 번 직접), 직접 설치는 herdr 창에서 `srhbroker daemon`. 엔진이 하는 일, 멈추기·업데이트 뒤 다시 뜨는 방식, herdr 밖에서 띄울 때의 차이.
+- herdr 에는 플러그인 액션 메뉴가 없어 액션 이름 대신 `herdr plugin action invoke srhbroker.<액션>` 명령과 키 묶기(`[[keys.command]] type = "plugin_action"`) 예시로 안내.
+
+### 고침
+- `status`·`doctor`·`update` 가 엔진을 띄우라고 안내할 때 찾을 수 없는 액션 이름('Start broker engine') 대신 실행할 명령(`herdr plugin action invoke srhbroker.start-engine`)을 보여 줍니다.
+
 ## 0.6.0 — 2026-10-11
 
 ### 추가

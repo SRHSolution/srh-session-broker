@@ -56,6 +56,9 @@ def test_manifest_matches_package():
         ids = [x["id"] for x in MANIFEST[section]]
         assert len(ids) == len(set(ids)), f"{section} id 중복 (herdr 가 링크를 거부)"
     assert {p["id"] for p in MANIFEST["panes"]} == {plugin.ENGINE, plugin.DASHBOARD, plugin.WATCH, plugin.OUTPUT}
+    # status·doctor·update 가 안내하는 엔진 시작 명령이 실제 액션을 가리킨다
+    pid, _, action = plugin.START_ENGINE_CMD.rsplit(" ", 1)[1].partition(".")
+    assert pid == MANIFEST["id"] and action in {a["id"] for a in MANIFEST["actions"]}
 
 
 def test_manifest_commands_are_valid_srhbroker_commands(capsys):

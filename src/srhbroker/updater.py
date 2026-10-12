@@ -351,7 +351,8 @@ def restart_daemon(b: Any, out: Callable[[str], None]) -> None:
                 return
         if d.get("plugin"):
             break   # 엔진 탭을 두 번 열면 중복 탭이 남는다
-    hint = ("herdr 에서 'Start broker engine' 액션을 실행하세요" if d.get("plugin")
+    from .plugin import START_ENGINE_CMD
+    hint = (f"herdr 창에서 {START_ENGINE_CMD} 를 실행하세요" if d.get("plugin")
             else f"창 {pane} 에서 srhbroker daemon 을 실행하세요")
     out(f"! 데몬을 다시 띄우지 못했습니다 — {hint}")
 

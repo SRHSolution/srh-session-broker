@@ -431,8 +431,9 @@ def _status(b: Any) -> int:
         st = {}
     print(f"브로커 홈: {home}")
     if not running:
+        from .plugin import START_ENGINE_CMD
         print("데몬: 실행 중 아님 — herdr 창 하나에서 `srhbroker daemon` 을 띄우세요 "
-              "(herdr 플러그인이면 'Start broker engine' 액션. worker 실행, 밀린 메시지 전달, 오래된 대기 작업 만료)")
+              f"(herdr 플러그인이면 `{START_ENGINE_CMD}`. worker 실행, 밀린 메시지 전달, 오래된 대기 작업 만료)")
     elif not st:
         print("데몬: 실행 중 (이전 버전 — 상태 정보 없음). 재시작하면 herdr 여부·코드 변경 여부가 표시됩니다")
     else:
