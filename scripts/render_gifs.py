@@ -2,9 +2,10 @@
 
 모든 세션·작업은 `srhbroker demo` 와 같은 가짜 데이터이고, herdr 창과 데몬 상태도 가짜다. 실제 브로커 홈은 건드리지 않는다.
 화면 위에 가짜 마우스 커서·클릭 표시를 덧씌우고, 화면 아래에 영문 단계 자막 띠를 붙인다(대시보드 화면 자체는 그대로).
+화면·예시 데이터 언어는 --lang (기본 en — 영문 README 용). ko 로 만들면 파일 이름 끝에 -ko 가 붙는다.
 
 필요: pip install -e ".[screenshots]"  (playwright·Pillow) + 설치된 Chrome (없으면 `playwright install chromium` 후 --bundled)
-실행: python scripts/render_gifs.py [--out docs/images] [--only tour,route,approve,watch] [--bundled]
+실행: python scripts/render_gifs.py [--lang en|ko] [--out docs/images] [--only tour,route,approve,watch] [--bundled]
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from render_screenshots import PhantomHerdr, ansi_html, free_port, terminal_page  # noqa: E402
-from srhbroker import onboard, watch  # noqa: E402
+from srhbroker import i18n, onboard, watch  # noqa: E402
 from srhbroker.config import load_config  # noqa: E402
 from srhbroker.dashboard import make_handler  # noqa: E402
 from srhbroker.dispatcher import SingleInstance, code_mtime  # noqa: E402
@@ -37,6 +38,18 @@ from srhbroker.monitor import snapshot  # noqa: E402
 from srhbroker.service import Broker  # noqa: E402
 
 VIEWPORT = {"width": 1440, "height": 860}
+LANG = "en"   # main() 이 --lang 으로 바꾼다
+# 장면이 고르는 예시 작업 제목·검색어·자막 속 화면 이름 (onboard.DEMO_TEXT 와 같은 내용)
+TEXT = {
+    "en": {"review": "Coupon API review", "coupon": "Cart coupon API", "search": "coupon", "mail": "Email wording",
+           "needs_you": "Needs you", "held": "Awaiting approval", "routed": "Routed to {to}"},
+    "ko": {"review": "쿠폰 API 리뷰", "coupon": "쿠폰 적용 API 구현", "search": "쿠폰", "mail": "메일 문구",
+           "needs_you": "사람이 처리할 것", "held": "승인 대기", "routed": "대상 지정: {to}"},
+}
+
+
+def tx(key: str) -> str:
+    return TEXT[LANG][key]
 TOKEN = "demo-token"
 CAPTION_H = 60
 # 자막 글꼴 (Windows · macOS · Linux 순). 영문은 라틴 글꼴, 따옴표로 함께 적는 한글 UI 이름은 한글 글꼴로 쓴다
@@ -232,7 +245,8 @@ def save_gif(frames: list[tuple[Image.Image, int]], path: Path) -> dict:
 
 
 def open_page(browser, port: int):
-    ctx = browser.new_context(color_scheme="dark", viewport=VIEWPORT, device_scale_factor=1, locale="ko-KR")
+    ctx = browser.new_context(color_scheme="dark", viewport=VIEWPORT, device_scale_factor=1,
+                              locale="en-US" if LANG == "en" else "ko-KR")
     ctx.add_init_script(INIT_JS)
     pg = ctx.new_page()
     pg.goto(f"http://127.0.0.1:{port}/?t={TOKEN}")
@@ -261,7 +275,7 @@ def scene_tour(pg) -> list:
 
     r.caption("2", "Open a flow to see every relay step, from sent to reply")
     r.hold(400)
-    r.click(row(pg, "쿠폰 API 리뷰"))
+    r.click(row(pg, tx("review")))
     pg.locator("#detail .tl").wait_for()
     r.move((1365, 470), steps=8)
     r.hold(3000)
@@ -270,12 +284,12 @@ def scene_tour(pg) -> list:
     r.hold(400)
     r.key("/", settle_ms=150)
     r.hold(500)
-    r.type("쿠폰", ms=160)
+    r.type(tx("search"), ms=160)
     pg.wait_for_timeout(700)    # 입력 뒤 0.3초 묶었다가 서버 검색
     r.hold(1800)
 
     r.caption("4", "Each task keeps its acceptance criteria and the full result")
-    r.click(row(pg, "쿠폰 적용 API 구현"))
+    r.click(row(pg, tx("coupon")))
     pg.locator("#detail .tl").wait_for()
     r.move((1380, 600), steps=8)
     r.hold(900)
@@ -287,7 +301,7 @@ def scene_tour(pg) -> list:
 def scene_route(pg) -> list:
     r = Recorder(pg, start=(760, 300))
     item = pg.locator("#todo li.route")
-    r.caption(None, "No target? The task waits under “사람이 처리할 것” until you route it")
+    r.caption(None, f"No target? The task waits under “{tx('needs_you')}” until you route it")
     r.move(item.locator(".t"), steps=10)
     r.hold(2300)
 
@@ -306,7 +320,7 @@ def scene_route(pg) -> list:
     r.hold(2300)
 
     r.caption("4", "The flow now shows who received it, and its timeline records your routing")
-    r.click(row(pg, "메일 문구"))
+    r.click(row(pg, tx("mail")))
     pg.locator("#detail .tl").wait_for()
     r.move((1340, 560), steps=8)
     r.hold(3200)
@@ -316,7 +330,7 @@ def scene_route(pg) -> list:
 def scene_approve(pg) -> list:
     r = Recorder(pg, start=(760, 330))
     item = pg.locator("#todo li.approve")
-    r.caption(None, "Risky work waits for you — “승인 대기” says why it was held")
+    r.caption(None, f"Risky work waits for you — “{tx('held')}” says why it was held")
     r.move(item.locator(".d"), steps=10)
     r.hold(2500)
 
@@ -356,7 +370,7 @@ def scene_watch(pg, b) -> list:
     pg.wait_for_timeout(300)
     r = Recorder(pg, el=pg.locator(".win"))
     cur = "\x1b[2m█\x1b[0m"
-    ask1, ask2 = "작업 ID 또는 [번호]: ", "보낼 대상 (세션 이름·별칭·역할): "
+    ask1, ask2 = i18n.tr("작업 ID 또는 [번호]: "), i18n.tr("보낼 대상 (세션 이름·별칭·역할): ")
     r.caption(None, "The same view in a terminal: srhbroker watch (keys at the bottom)")
     r.hold(2800)
 
@@ -378,7 +392,7 @@ def scene_watch(pg, b) -> list:
 
     r.caption("3", "Enter: it goes to docs-claude and leaves the list")
     res = b.assign(route["task_id"], typed)
-    draw(note=f"대상 지정: {res['to']}")
+    draw(note=tx("routed").format(to=res["to"]))
     r.hold(3400)
     return r.frames
 
@@ -391,9 +405,10 @@ def make_broker():
     """장면마다 새 예시 데이터 (대상 지정·승인이 앞 장면에 영향을 주지 않게)."""
     home = Path(tempfile.mkdtemp(prefix="srhbroker-gifs-"))
     os.environ["SRHBROKER_HOME"] = str(home)   # 혹시 홈을 환경 변수로 찾는 코드가 있어도 예시 폴더를 보게
-    (home / "config.toml").write_text(onboard.DEMO_CONFIG, encoding="utf-8")
+    (home / "config.toml").write_text(onboard.DEMO_CONFIG + f'\n[ui]\nlang = "{LANG}"\n', encoding="utf-8")
     b = Broker(load_config(home=home))
-    asyncio.run(onboard.seed_demo(b))
+    with i18n.use(LANG):
+        asyncio.run(onboard.seed_demo(b))
     b.herdr = GifHerdr()
     return b, home
 
@@ -403,7 +418,10 @@ def main() -> int:
     ap.add_argument("--out", default=str(ROOT / "docs" / "images"))
     ap.add_argument("--only", default=",".join(SCENES), help="만들 장면 (쉼표로): " + ", ".join(SCENES))
     ap.add_argument("--bundled", action="store_true", help="설치된 Chrome 대신 playwright 가 받은 Chromium 사용")
+    ap.add_argument("--lang", choices=list(TEXT), default="en", help="화면·예시 데이터 언어 (ko 는 파일 이름에 -ko)")
     a = ap.parse_args()
+    global LANG
+    LANG = a.lang
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
 
@@ -415,6 +433,8 @@ def main() -> int:
         browser = p.chromium.launch(**({} if a.bundled else {"channel": "chrome"}))
         for key, b, home in jobs:
             name, scene = SCENES[key]
+            if LANG != "en":
+                name = name.replace(".gif", f"-{LANG}.gif")
             # 데몬이 실행 중인 것처럼: 잠금을 쥐고 상태 파일의 신호 시각을 계속 갱신한다 (가짜)
             lock = SingleInstance(home / "daemon.lock")
             lock.acquire()
@@ -444,7 +464,8 @@ def main() -> int:
                 ctx, pg = open_page(browser, port)
                 run = lambda: scene(pg)  # noqa: E731
             try:
-                results.append(save_gif(run(), out / name))
+                with i18n.use(LANG):   # watch 화면은 이 프로세스에서 그린다 (웹은 페이지가 lang 을 넘김)
+                    results.append(save_gif(run(), out / name))
             finally:
                 ctx.close()
                 if httpd:

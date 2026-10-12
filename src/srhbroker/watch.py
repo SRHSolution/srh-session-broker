@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Any
 
 from . import monitor
+from .i18n import tr
 from .models import USER_ADDR, BrokerError
 
 # ── 표시 폭 (한글은 2칸) ─────────────────────────────────────────────────
@@ -52,7 +53,7 @@ def _ago(ts: float | None) -> str:
     if not ts:
         return "-"
     s = max(0, int(time.time() - ts))
-    return f"{s}초" if s < 120 else f"{s // 60}분" if s < 7200 else f"{s // 3600}시간"
+    return tr("{n}초", n=s) if s < 120 else tr("{n}분", n=s // 60) if s < 7200 else tr("{n}시간", n=s // 3600)
 
 
 def _iso_ago(iso: str | None) -> str:
@@ -61,6 +62,7 @@ def _iso_ago(iso: str | None) -> str:
 
 _PANE = {"open": ("●", "green"), "closed": ("○", "dim"), "mismatch": ("◆", "red"), "unknown": ("?", "dim"),
          "worker": ("◇", "cyan")}
+# 이름은 한국어 원문 — 그릴 때 tr() 로 바꾼다
 _KIND = {"approve": ("승인 대기", "yellow"), "route": ("대상 미정", "yellow"), "closed-pane": ("창 닫힘", "magenta"),
          "failed": ("실패", "red"), "mismatch": ("창 짝 불일치", "red"), "engine": ("엔진", "red")}
 _TRANSPORT = {"broker": ("중계", "blue"), "claude-native": ("Claude", "magenta"), "herdr-direct": ("Codex직접", "cyan")}
@@ -74,29 +76,31 @@ def render(snap: dict[str, Any], flow_filter: str | None = None, cols: int = 120
     out: list[str] = []
     d = snap["daemon"]
     if not d["running"]:
-        eng = col("데몬 꺼짐", "red", "bold")
+        eng = col(tr("데몬 꺼짐"), "red", "bold")
     elif d.get("legacy"):
-        eng = col("데몬 실행(이전 버전)", "yellow")
+        eng = col(tr("데몬 실행(이전 버전)"), "yellow")
     else:
-        eng = col("데몬 실행", "green") + f" pid {d['pid']} · 신호 {_ago(d.get('heartbeat'))} 전 · " + (
-            col("herdr 전달 가능", "green") if d.get("herdr") else col("herdr 밖", "red"))
+        eng = col(tr("데몬 실행"), "green") + tr(" pid {pid} · 신호 {ago} 전 · ", pid=d["pid"], ago=_ago(d.get("heartbeat"))) + (
+            col(tr("herdr 전달 가능"), "green") if d.get("herdr") else col(tr("herdr 밖"), "red"))
         if d.get("restart_needed"):
-            eng += " · " + col("재시작 필요", "yellow", "bold")
+            eng += " · " + col(tr("재시작 필요"), "yellow", "bold")
     st = snap["stats"]
     f24 = st["flows_24h"]
     up = snap.get("update") or {}
     if up.get("available"):
-        eng += " · " + col(f"새 버전 {up['latest']} — srhbroker update", "yellow")
+        eng += " · " + col(tr("새 버전 {v} — srhbroker update", v=up["latest"]), "yellow")
     out.append(col(" SRH Broker ", "bold") + f" {datetime.now():%H:%M:%S}  {eng}")
-    out.append(col(f" 24시간: 중계 {f24['broker']} · Claude 직접 {f24['claude-native']} · Codex 직접 {f24['herdr-direct']}"
-                   + (f" · 전달 중앙값 {st['median_delivery_s_24h']}초" if st["median_delivery_s_24h"] is not None else ""),
+    out.append(col(tr(" 24시간: 중계 {broker} · Claude 직접 {native} · Codex 직접 {direct}", broker=f24["broker"],
+                      native=f24["claude-native"], direct=f24["herdr-direct"])
+                   + (tr(" · 전달 중앙값 {s}초", s=st["median_delivery_s_24h"]) if st["median_delivery_s_24h"] is not None else ""),
                    "dim"))
     out.append("")
 
     att = snap["attention"]
-    out.append(col(f"처리할 것 ({len(att)})", "bold") + ("" if att else col("  없음", "green")))
+    out.append(col(tr("처리할 것 ({n})", n=len(att)), "bold") + ("" if att else col(tr("  없음"), "green")))
     for i, a in enumerate(att[:8], 1):
         label, c = _KIND.get(a["kind"], (a["kind"], "dim"))
+        label = tr(label)
         ref = a.get("task_id") or a.get("session") or ""
         line = f" [{i}] " + col(fit(label, 12), c) + " " + fit(ref, 26) + " " + fit(a["title"], max(20, cols - 46))
         out.append(line)
@@ -104,32 +108,34 @@ def render(snap: dict[str, Any], flow_filter: str | None = None, cols: int = 120
             out.append("      " + col(fit(a["detail"], cols - 8), "dim"))
     out.append("")
 
-    out.append(col("세션", "bold"))
-    out.append(col(" " + fit("이름", 24) + fit("종류", 8) + fit("창", 18) + fit("받을것", 7) + fit("처리중", 7)
-                   + fit("승인대기", 9) + "역할", "dim"))
+    out.append(col(tr("세션"), "bold"))
+    out.append(col(" " + fit(tr("이름"), 24) + fit(tr("종류"), 8) + fit(tr("창"), 18) + fit(tr("받을것"), 7) + fit(tr("처리중"), 7)
+                   + fit(tr("승인대기"), 9) + tr("역할|열"), "dim"))
     for s in snap["sessions"]:
         mark, c = _PANE[s["pane_state"]]
-        pane = {"open": f"{s['pane_id']} {s['agent_status']}" + ("*" if s.get("pane_by") == "title" else ""), "closed": "닫힘", "mismatch": f"{s['pane_id']} 불일치",
+        pane = {"open": f"{s['pane_id']} {s['agent_status']}" + ("*" if s.get("pane_by") == "title" else ""), "closed": tr("닫힘"),
+                "mismatch": tr("{pane} 불일치", pane=s["pane_id"]),
                 "unknown": "?", "worker": "worker"}[s["pane_state"]]
         out.append(" " + fit(s["name"], 24) + fit(s["provider"], 8) + col(mark, c) + " " + fit(pane, 16)
                    + fit(s["queued"] or "", 7) + fit((s["delivered"] + s["running"]) or "", 7)
                    + fit(s["held"] or "", 9) + ",".join(s["roles"]))
     if any(s.get("pane_by") == "title" for s in snap["sessions"]):
-        out.append(col("  * herdr 짝이 어긋나 창 제목으로 찾은 창", "dim"))
+        out.append(col(tr("  * herdr 짝이 어긋나 창 제목으로 찾은 창"), "dim"))
     out.append("")
 
     flows = [f for f in snap["flows"] if not flow_filter or f["transport"] == flow_filter]
-    title = {None: "전체", "broker": "중계", "claude-native": "Claude 직접", "herdr-direct": "Codex 직접"}[flow_filter]
-    out.append(col(f"흐름 ({title})", "bold") + col("  f: 필터 전환", "dim"))
+    title = tr({None: "전체", "broker": "중계", "claude-native": "Claude 직접", "herdr-direct": "Codex 직접"}[flow_filter])
+    out.append(col(tr("흐름 ({title})", title=title), "bold") + col(tr("  f: 필터 전환"), "dim"))
     room = max(3, rows - len(out) - 3)
     for f in flows[:room]:
         tlabel, tc = _TRANSPORT.get(f["transport"], (f["transport"], "dim"))
+        tlabel = tr(tlabel)
         sc = _STATUS_COLOR.get(f["status"], "dim")
         out.append(" " + fit(_iso_ago(f["at"]), 7) + col(fit(tlabel, 10), tc) + fit(f["from"], 22) + "→ "
                    + fit(f["to"] or "?", 22) + col(fit(f["status"], 14), sc)
                    + fit(f.get("summary") or "", max(10, cols - 80)))
     out.append("")
-    out.append(col(" a 승인 · c 취소 · t 대상 지정 · d 상세 · f 필터 · r 새로고침 · q 종료   (작업은 ID 또는 [번호])", "dim"))
+    out.append(col(tr(" a 승인 · c 취소 · t 대상 지정 · d 상세 · f 필터 · r 새로고침 · q 종료   (작업은 ID 또는 [번호])"), "dim"))
     return out
 
 
@@ -176,39 +182,41 @@ def _ask(prompt: str) -> str:
 
 def _act(b: Any, snap: dict[str, Any], key: str) -> str:
     """키에 해당하는 조작을 하고 결과 한 줄을 돌려준다."""
-    tid = _pick(snap, _ask("작업 ID 또는 [번호]: "))
+    tid = _pick(snap, _ask(tr("작업 ID 또는 [번호]: ")))
     if not tid:
-        return "취소됨"
+        return tr("취소됨")
     try:
         if key == "d":
             t = monitor.task_detail(b, tid)
-            print(f"\n{t['task_id']} [{t['status']}] {t['from']} → {t['to']}" + (f"  권한 {t['sandbox']}" if t.get("sandbox") else ""))
-            print(f"제목: {t['title']}\n\n중계 경과:")
+            print(f"\n{t['task_id']} [{t['status']}] {t['from']} → {t['to']}"
+                  + (tr("  권한 {perm}", perm=t["sandbox"]) if t.get("sandbox") else ""))
+            print(tr("제목: {title}\n\n중계 경과:", title=t["title"]))
             for e in t.get("timeline") or []:
-                when = datetime.fromisoformat(e["at"]).astimezone().strftime("%m/%d %H:%M:%S") if e["at"] else "아직"
-                after = "" if e["after_s"] is None else f"+{e['after_s']}초" if e["after_s"] < 120 else f"+{e['after_s'] // 60}분"
+                when = datetime.fromisoformat(e["at"]).astimezone().strftime("%m/%d %H:%M:%S") if e["at"] else tr("아직")
+                after = ("" if e["after_s"] is None else tr("+{n}초", n=e["after_s"]) if e["after_s"] < 120
+                         else tr("+{n}분", n=e["after_s"] // 60))
                 tone = {"ok": "green", "wait": "yellow", "bad": "red"}.get(e["tone"])
                 print(f"  {when} {after:>6}  " + (col(e["step"], tone) if tone else e["step"]) + f"  {e['text'][:200]}")
-            print(f"\n보낸 내용:\n{t['body']}\n")
+            print(tr("\n보낸 내용:\n{body}\n", body=t["body"]))
             if t.get("result") or t.get("error"):
-                print("결과:\n" + (t.get("result") or t.get("error") or ""))
-            _ask("\nEnter 로 돌아가기")
+                print(tr("결과:\n") + (t.get("result") or t.get("error") or ""))
+            _ask(tr("\nEnter 로 돌아가기"))
             return ""
         if key == "c":
-            if _ask(f"{tid} 를 취소할까요? (y/N) ").strip().lower() != "y":
-                return "취소 안 함"
-            return f"취소: {b.cancel(tid, by=USER_ADDR)['status']}"
+            if _ask(tr("{tid} 를 취소할까요? (y/N) ", tid=tid)).strip().lower() != "y":
+                return tr("취소 안 함")
+            return tr("취소: {status}", status=b.cancel(tid, by=USER_ADDR)["status"])
         if key == "a":
             t = monitor.task_detail(b, tid)
-            print(f"제목: {t['title']}\n보류 사유: {t.get('safety')}")
-            if _ask(f"{tid} 를 승인할까요? (y/N) ").strip().lower() != "y":
-                return "승인 안 함"
-            return f"승인: {b.approve(tid, confirmation='watch 화면에서 사용자가 승인', via='watch')['status']}"
+            print(tr("제목: {title}\n보류 사유: {safety}", title=t["title"], safety=t.get("safety")))
+            if _ask(tr("{tid} 를 승인할까요? (y/N) ", tid=tid)).strip().lower() != "y":
+                return tr("승인 안 함")
+            return tr("승인: {status}", status=b.approve(tid, confirmation="watch 화면에서 사용자가 승인", via="watch")["status"])
         if key == "t":
-            to = _ask("보낼 대상 (세션 이름·별칭·역할): ").strip()
-            return f"대상 지정: {b.assign(tid, to)['to']}" if to else "취소됨"
+            to = _ask(tr("보낼 대상 (세션 이름·별칭·역할): ")).strip()
+            return tr("대상 지정: {to}", to=b.assign(tid, to)["to"]) if to else tr("취소됨")
     except BrokerError as e:
-        return f"오류: {e}"
+        return tr("오류: {e}", e=e)
     return ""
 
 

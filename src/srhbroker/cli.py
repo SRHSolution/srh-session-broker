@@ -265,9 +265,12 @@ def _dispatch(a: argparse.Namespace) -> int:
     if a.cmd == "status":
         return _status(_broker())
     if a.cmd == "watch":
+        from . import i18n
         from .watch import run
+        b = _broker()
         try:
-            return run(_broker(), interval=a.interval, once=a.once)
+            with i18n.use(i18n.config_lang(b.cfg)):   # [ui] lang, auto 면 시스템 언어
+                return run(b, interval=a.interval, once=a.once)
         except KeyboardInterrupt:
             return 0
     if a.cmd == "dashboard":
@@ -490,11 +493,14 @@ def _demo(home_arg: str | None) -> int:
     if (home / "broker.db").exists():
         print(f"이미 예시 데이터가 있습니다: {home} (새로 만들려면 폴더를 지우세요)")
     else:
+        from . import i18n
+        lang = i18n.config_lang(load_config())   # 예시 데이터·화면은 실제 설정의 언어로
         home.mkdir(parents=True, exist_ok=True)
-        (home / "config.toml").write_text(DEMO_CONFIG, encoding="utf-8")
+        (home / "config.toml").write_text(DEMO_CONFIG + f'\n[ui]\nlang = "{lang}"\n', encoding="utf-8")
         b = Broker(load_config(home=home))
         _OPENED.append(b)
-        n = asyncio.run(seed_demo(b))
+        with i18n.use(lang):
+            n = asyncio.run(seed_demo(b))
         print(f"예시 데이터 생성: {home} — 세션 {n['sessions']} · 작업 {n['tasks']} · 직접 전달 {n['direct']} · 관찰 {n['observed']}")
     env = f'$env:SRHBROKER_HOME = "{home}"' if sys.platform == "win32" else f'export SRHBROKER_HOME="{home}"'
     print(f"\n보려면 (이 셸에서만 예시 홈 사용):\n  {env}\n  srhbroker watch          # 터미널 대시보드 (q 로 종료)\n"

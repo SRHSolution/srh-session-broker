@@ -101,6 +101,10 @@ DEFAULTS: dict[str, Any] = {
     "plugin": {
         "autostart_engine": True,
     },
+    # 화면 언어 (웹 대시보드·watch·demo 예시 데이터): auto(시스템·브라우저 언어) | ko | en. CLI 메시지는 한국어
+    "ui": {
+        "lang": "auto",
+    },
     # 관찰 기록(flow_log)·대시보드
     "monitor": {
         "store_body_chars": 2000,  # Claude 직접 메시지 관찰 기록에 남길 본문 길이 (0 이면 본문을 남기지 않음)
@@ -215,6 +219,10 @@ def load_config(home: Path | None = None, overrides: dict[str, Any] | None = Non
 
 EXAMPLE_CONFIG = """\
 # SRH Session Broker 설정 — 생략한 항목은 기본값을 쓴다.
+
+[ui]
+# 웹 대시보드·watch 화면 언어: auto(시스템·브라우저 언어) | ko | en
+lang = "auto"
 
 [broker]
 max_parallel = 4

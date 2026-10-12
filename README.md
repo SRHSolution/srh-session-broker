@@ -16,7 +16,7 @@ English · [한국어](README.ko.md)
 
 ![Web dashboard tour: filter by session, open a hand-off to see each relay step, search](docs/images/dashboard-tour.gif)
 
-<sub>Everything on screen is demo data from `srhbroker demo`. The dashboard and CLI messages are in Korean for now. The captions under each GIF explain the steps.</sub>
+<sub>Everything on screen is demo data from `srhbroker demo`. The captions under each GIF explain the steps.</sub>
 
 When you run several Claude Code and Codex panes side by side, one pane keeps needing another: "ask the Codex pane to implement this", "have the reviewer look at it", "tell the web pane the build cache is cleared". SRH Session Broker lets each session call the others **by the name you gave it with `/rename`**. Messages are **typed straight into the receiving pane**, and replies **come back to the pane that asked**. Risky work waits for your approval. You can watch all of it in a terminal or web dashboard.
 
@@ -196,16 +196,19 @@ Run `srhbroker dashboard --open`, or the plugin action `herdr plugin action invo
 
 - **Layout.** On wide screens there are three columns. The left column is the session switchboard: sessions grouped by project with pane state, waiting work and 24-hour counts; click one to filter. The middle column lists flows with time, route, sender → receiver, status, title and a three-line preview. The right column shows the detail: relay timeline, full body, result and the Jev verdict. On narrow screens the detail opens as an overlay.
 - **Search and filters.** Press `/` to search senders, receivers, titles, bodies, results and IDs across the whole history. You can also filter by route, status, period and session, and choose whether to include agent-team messages inside a session. Filters are remembered in the browser.
+- **Language.** English or Korean, following your browser. Switch with the button at the top right, or set `[ui] lang` for every browser.
 - **Security.** The dashboard listens on `127.0.0.1` only and needs the token printed at start. Open the printed `?t=…` address once and that browser remembers it for 30 days through an HttpOnly, SameSite=Strict cookie. Approve, cancel and route are POST requests checked against the token, Origin and Host, which blocks CSRF and DNS rebinding. Approvals are logged with `via=dashboard` or `via=watch`.
 - **Token.** It is stored in `~/.srhbroker/dashboard.token`, so the address survives restarts. `--new-token` replaces it and invalidates remembered cookies.
 
 ### Terminal dashboard
 
-Run `srhbroker watch`, or the plugin action `srhbroker.watch` to open it in a split. Keys: `a` approve · `c` cancel · `t` route · `d` detail · `f` flow filter · `r` refresh · `q` quit. Pick a task by its ID or its `[number]`.
+Run `srhbroker watch`, or the plugin action `srhbroker.watch` to open it in a split. It uses your system language (English or Korean) unless `[ui] lang` is set. Keys: `a` approve · `c` cancel · `t` route · `d` detail · `f` flow filter · `r` refresh · `q` quit. Pick a task by its ID or its `[number]`.
 
 ![Routing a task from the terminal dashboard](docs/images/watch.gif)
 
 ### Command line
+
+Command output is in Korean for now. The dashboards above are in English or Korean.
 
 | Command | Use |
 |---|---|
@@ -221,8 +224,6 @@ Run `srhbroker watch`, or the plugin action `srhbroker.watch` to open it in a sp
 | `srhbroker daemon` | Run the [engine](#running-the-engine) in the current pane |
 | `srhbroker setup claude\|codex [--apply]` · `init` · `demo` | Connect, initialize, demo data |
 | `srhbroker update [--check] [--to vX.Y.Z] [--stop-all]` · `--version` | Update from the repository's release tags |
-
-![srhbroker doctor and tasks](docs/images/cli.png)
 
 ## How it works
 
@@ -298,6 +299,7 @@ Only the AI router talks to an outside service, and only when a key is set. It s
 
 | Setting | Default | Meaning |
 |---|---|---|
+| `[ui] lang` | `auto` | Language of the web and terminal dashboards and of `srhbroker demo` data: `auto` (browser or system language), `en` or `ko` |
 | `[plugin] autostart_engine` | `true` | Start the engine tab when the herdr server starts |
 | `[router] mode` | `shadow` | `rules` · `shadow` · `jev` |
 | `[[roles]]` | | `name`, `description`, `preferred_provider` |
@@ -379,7 +381,7 @@ A worker's final answer becomes its reply automatically. If it calls `reply` dur
 
 | | |
 |---|---|
-| Windows 11 | Daily use. 236 tests pass. The herdr plugin was checked on herdr 0.9.1: link, actions, popup output, engine tab, update restart. |
+| Windows 11 | Daily use. 246 tests pass. The herdr plugin was checked on herdr 0.9.1: link, actions, popup output, engine tab, update restart. |
 | macOS 26.6 (Apple Silicon) | Install → `setup --apply` → `doctor` → demo and web dashboard, plus the engine running a real `codex exec` worker. The herdr plugin has not been checked on macOS yet. |
 | Linux | Expected to work on the same POSIX paths, but not yet tested. Please open an issue if something breaks. |
 | Claude Code 2.x · codex-cli 0.159–0.160 | MCP environment, session IDs, `-p --session-id` / `--resume`, `exec resume`, Stop hook format |

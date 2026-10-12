@@ -7,6 +7,9 @@
 - 조작(승인·취소·대상 지정)은 POST + 토큰(헤더 또는 쿠키) + Origin·Host 검사 — 다른 웹사이트가 몰래 요청하는 CSRF·DNS 리바인딩 차단.
   SameSite=Strict 라 다른 사이트에서 보낸 요청에는 쿠키가 실리지 않는다.
 - 조작 권한은 터미널의 사람(CLI)과 같다. 승인 기록에는 via=dashboard 로 남는다.
+
+언어: 페이지에 설정 [ui] lang 을 data-lang 으로 넣고, 화면이 고른 언어를 API 요청의 lang 으로 받아 서버 문구(처리할 것·중계 경과)를
+같은 언어로 만든다 (i18n).
 """
 
 from __future__ import annotations
@@ -25,18 +28,24 @@ from importlib import resources
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from . import monitor
+from . import i18n, monitor
 from .models import USER_ADDR, BrokerError
 
 
-def _page() -> bytes:
-    return resources.files("srhbroker").joinpath("static/dashboard.html").read_bytes()
+def _page(lang_setting: str = "auto") -> bytes:
+    page = resources.files("srhbroker").joinpath("static/dashboard.html").read_bytes()
+    return page.replace(b'<html lang="ko">', f'<html lang="ko" data-lang="{lang_setting}">'.encode(), 1)
 
 
 COOKIE_MAX_AGE = 30 * 24 * 3600
 
 _NEED_TOKEN = """<!doctype html><meta charset="utf-8"><title>Session Broker Dashboard</title>
 <body style="font: 15px/1.6 system-ui, sans-serif; max-width: 560px; margin: 12vh auto; padding: 0 16px">
+<h1 style="font-size: 20px" lang="en">Open the dashboard with its token</h1>
+<p lang="en">Open the address that <code>srhbroker dashboard</code> printed (<code>…/?t=…</code>) <b>once</b>. This browser then
+remembers it for 30 days, so reloads and new tabs open directly. To see the address again, look at the pane running
+<code>srhbroker dashboard</code>, or run <code>srhbroker dashboard --open</code>. After <code>--new-token</code>, open the new address.</p>
+<hr style="border: 0; border-top: 1px solid #ccc; margin: 24px 0">
 <h1 style="font-size: 20px">토큰이 필요합니다</h1>
 <p>터미널에서 <code>srhbroker dashboard</code> 가 출력한 주소(<code>…/?t=…</code>)로 <b>한 번</b> 열면,
 이 브라우저는 30일 동안 기억해서 새로고침·새 탭에서도 바로 열립니다.</p>
@@ -46,6 +55,7 @@ _NEED_TOKEN = """<!doctype html><meta charset="utf-8"><title>Session Broker Dash
 
 def make_handler(b: Any, token: str, port: int) -> type[BaseHTTPRequestHandler]:
     allowed_hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
+    lang_setting = i18n.setting(b.cfg)                       # auto·ko·en — auto 면 브라우저 언어
     cookie_name = f"srhb_token_{port}"   # 쿠키는 포트를 가리지 않으므로 이름에 포트를 넣는다
     lock = threading.Lock()  # 브로커 객체(DB 연결·herdr 호출)는 한 번에 한 요청만
 
@@ -98,12 +108,16 @@ def make_handler(b: Any, token: str, port: int) -> type[BaseHTTPRequestHandler]:
             u = urlparse(self.path)
             if u.path == "/":
                 if self._token_ok(parse_qs(u.query).get("t", [None])[0]):   # 처음: 토큰 주소 → 쿠키로 기억
-                    return self._send(HTTPStatus.OK, _page(), "text/html; charset=utf-8", cookie=token)
+                    return self._send(HTTPStatus.OK, _page(lang_setting), "text/html; charset=utf-8", cookie=token)
                 if self._token_ok(self._cookie()):
-                    return self._send(HTTPStatus.OK, _page(), "text/html; charset=utf-8")
+                    return self._send(HTTPStatus.OK, _page(lang_setting), "text/html; charset=utf-8")
                 return self._send(HTTPStatus.FORBIDDEN, _NEED_TOKEN.encode("utf-8"), "text/html; charset=utf-8")
             if not self._authed():
                 return self._json(HTTPStatus.FORBIDDEN, {"error": "token"})
+            with i18n.use(parse_qs(u.query).get("lang", ["ko"])[0]):
+                return self._get(u)
+
+        def _get(self, u: Any) -> None:
             try:
                 with lock:
                     if u.path == "/api/snapshot":
@@ -122,7 +136,7 @@ def make_handler(b: Any, token: str, port: int) -> type[BaseHTTPRequestHandler]:
             except BrokerError as e:
                 return self._json(HTTPStatus.BAD_REQUEST, {"error": str(e)})
             except ValueError:
-                return self._json(HTTPStatus.BAD_REQUEST, {"error": "잘못된 검색 조건"})
+                return self._json(HTTPStatus.BAD_REQUEST, {"error": i18n.tr("잘못된 검색 조건")})
             self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
         def do_POST(self) -> None:  # noqa: N802
@@ -148,7 +162,8 @@ def make_handler(b: Any, token: str, port: int) -> type[BaseHTTPRequestHandler]:
             except BrokerError as e:
                 return self._json(HTTPStatus.BAD_REQUEST, {"error": str(e)})
             except (ValueError, TypeError):
-                return self._json(HTTPStatus.BAD_REQUEST, {"error": "잘못된 요청"})
+                with i18n.use(parse_qs(urlparse(self.path).query).get("lang", ["ko"])[0]):
+                    return self._json(HTTPStatus.BAD_REQUEST, {"error": i18n.tr("잘못된 요청")})
 
     return Handler
 

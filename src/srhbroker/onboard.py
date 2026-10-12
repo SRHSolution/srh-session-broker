@@ -299,10 +299,43 @@ async def seed_demo(b: Any) -> dict[str, int]:
         b.herdr = real
 
 
+# 예시 작업 내용 — 화면 언어(i18n.current())에 맞춰 고른다
+DEMO_TEXT = {
+    "ko": {
+        "coupon": ("장바구니 쿠폰 적용 API 구현 — 할인 상한·중복 쿠폰 규칙 포함", "쿠폰 적용 API 구현",
+                   ["단위 테스트 통과", "OpenAPI 문서 갱신"], "구현 완료: POST /cart/coupons, 테스트 24개 통과, openapi.yaml 갱신"),
+        "scroll": ("상품 목록 무한 스크롤 구현, 스켈레톤 로딩 포함", "상품 목록 무한 스크롤"),
+        "review": ("쿠폰 API 변경분 리뷰 부탁 — 동시성(재고 차감) 위주", "쿠폰 API 리뷰",
+                   "중복 적용 경합 1건 지적: SELECT … FOR UPDATE 필요. 그 외 문제 없음"),
+        "plc": ("출고 라인 PLC 재연결 로직 수정 후 장비에서 시험", "PLC 재연결 로직 수정"),
+        "mail": ("결제 실패 알림 메일 문구 다듬기", "메일 문구"),
+        "cache": ("빌드 캐시를 비웠습니다 (참고만)", "빌드 캐시 비움"),
+        "cursor": ("상품 목록 API 에 cursor 페이지네이션 추가 가능할까요?", "cursor 페이지네이션"),
+        "share": "쿠폰 API 리뷰가 끝나면 결과를 api-codex 에도 공유해 주세요",
+        "checklist": "리뷰 체크리스트 문서에 동시성 항목 추가 부탁",
+    },
+    "en": {
+        "coupon": ("Implement the cart coupon API — include the discount cap and the no-stacking rule", "Cart coupon API",
+                   ["Unit tests pass", "OpenAPI spec updated"], "Done: POST /cart/coupons, 24 tests pass, openapi.yaml updated"),
+        "scroll": ("Add infinite scroll to the product list, with skeleton loading", "Product list infinite scroll"),
+        "review": ("Please review the coupon API changes — focus on concurrency (stock deduction)", "Coupon API review",
+                   "One race: a coupon can be applied twice. Needs SELECT … FOR UPDATE. Nothing else."),
+        "plc": ("Fix the PLC reconnect logic on the shipping line, then test it on the device", "Fix PLC reconnect logic"),
+        "mail": ("Polish the wording of the payment-failure email", "Email wording"),
+        "cache": ("Cleared the build cache (FYI)", "Build cache cleared"),
+        "cursor": ("Could we add cursor pagination to the product list API?", "Cursor pagination"),
+        "share": "When the coupon API review is done, please share the result with api-codex too",
+        "checklist": "Please add a concurrency item to the review checklist doc",
+    },
+}
+
+
 async def _seed(b: Any) -> dict[str, int]:
+    from .i18n import current, tr
     from .models import TaskStatus
+    tx = DEMO_TEXT.get(current(), DEMO_TEXT["ko"])
     for name, prov, mode, roles, desc in DEMO_SESSIONS:
-        b.register(name, prov, mode=mode, roles=roles, description=desc, native_id=f"demo-{name}",
+        b.register(name, prov, mode=mode, roles=roles, description=tr(desc), native_id=f"demo-{name}",
                    cwd="~/work/demo-shop", sandbox="read-only" if name.startswith("review") else "workspace-write")
     store = b.store
     now = datetime.now(timezone.utc)
@@ -327,42 +360,46 @@ async def _seed(b: Any) -> dict[str, int]:
                 cx.execute("INSERT INTO push_log(session, at) VALUES (?,?)", (t.from_addr, fields["finished_at"]))
 
     # 1) 완료된 위임: Claude → Codex 구현 → 회신
-    r = await send("장바구니 쿠폰 적용 API 구현 — 할인 상한·중복 쿠폰 규칙 포함", "lead-claude", "api-codex",
-                   title="쿠폰 적용 API 구현", acceptance=["단위 테스트 통과", "OpenAPI 문서 갱신"])
+    body, title, acc, result = tx["coupon"]
+    r = await send(body, "lead-claude", "api-codex", title=title, acceptance=acc)
     store.inbox("api-codex", mark=True)
-    b.reply(r["task_id"], "구현 완료: POST /cart/coupons, 테스트 24개 통과, openapi.yaml 갱신", sender="api-codex")
+    b.reply(r["task_id"], result, sender="api-codex")
     at(r["task_id"], 52, 4, 1260)
     # 2) 작업 중(전달됨): Claude → Codex
-    r = await send("상품 목록 무한 스크롤 구현, 스켈레톤 로딩 포함", "lead-claude", "web-codex", title="상품 목록 무한 스크롤")
+    body, title = tx["scroll"]
+    r = await send(body, "lead-claude", "web-codex", title=title)
     store.inbox("web-codex", mark=True)
     at(r["task_id"], 18, 3)
     # 3) 검토 요청: Codex → Claude reviewer (읽기 전용)
-    r = await send("쿠폰 API 변경분 리뷰 부탁 — 동시성(재고 차감) 위주", "api-codex", "reviewer", title="쿠폰 API 리뷰",
-                   sandbox="read-only")
+    body, title, result = tx["review"]
+    r = await send(body, "api-codex", "reviewer", title=title, sandbox="read-only")
     store.inbox("review-claude", mark=True)
-    b.reply(r["task_id"], "중복 적용 경합 1건 지적: SELECT … FOR UPDATE 필요. 그 외 문제 없음", sender="review-claude")
+    b.reply(r["task_id"], result, sender="review-claude")
     at(r["task_id"], 31, 6, 540)
     # 4) 승인 대기: 장비 제어 코드 변경 (하드웨어 대상 + 제어 동작 → 승인 전까지 읽기 전용)
-    r = await send("출고 라인 PLC 재연결 로직 수정 후 장비에서 시험", "lead-claude", "api-codex", title="PLC 재연결 로직 수정")
+    body, title = tx["plc"]
+    r = await send(body, "lead-claude", "api-codex", title=title)
     at(r["task_id"], 6)
     # 5) 대상 미정: 역할을 못 고름
-    r = await send("결제 실패 알림 메일 문구 다듬기", "api-codex", None, title="메일 문구")
+    body, title = tx["mail"]
+    r = await send(body, "api-codex", None, title=title)
     at(r["task_id"], 3)
     # 6) 알림: 받는 창이 닫혀 있어 소멸
-    r = await send("빌드 캐시를 비웠습니다 (참고만)", "web-codex", "docs-claude", kind="message", title="빌드 캐시 비움")
+    body, title = tx["cache"]
+    r = await send(body, "web-codex", "docs-claude", kind="message", title=title)
     store.transition(r["task_id"], (TaskStatus.QUEUED,), TaskStatus.CANCELLED, error="받는 창이 닫혀 있어 알림 소멸")
     store.log_route(r["task_id"], "drop", "docs-claude", None, True, {"reason": "no-pane"})
     at(r["task_id"], 11, None, 1)
     # 7) Codex ↔ Codex 직접 전달
     did = "d_" + now.strftime("%Y%m%d_%H%M%S") + "_demo01"
     store.enqueue_direct(did, "codex", "web-codex", "api-codex",
-                         {"body": "상품 목록 API 에 cursor 페이지네이션 추가 가능할까요?", "title": "cursor 페이지네이션", "kind": "task"})
+                         {"body": tx["cursor"][0], "title": tx["cursor"][1], "kind": "task"})
     store.claim_direct("api-codex")
     # 8) Claude ↔ Claude 기본 도구 메시지 (관찰 기록)
     store.log_flow(transport="claude-native", provider="claude", from_name="lead-claude", from_native="demo-lead-claude",
                    to_name="review-claude", to_raw="review-claude", status="sent",
-                   summary="쿠폰 API 리뷰가 끝나면 결과를 api-codex 에도 공유해 주세요")
+                   summary=tx["share"])
     store.log_flow(transport="claude-native", provider="claude", from_name="review-claude",
                    from_native="demo-review-claude", to_name="docs-claude", to_raw="docs-claude", status="sent",
-                   summary="리뷰 체크리스트 문서에 동시성 항목 추가 부탁")
+                   summary=tx["checklist"])
     return {"sessions": len(DEMO_SESSIONS), "tasks": len(store.list_tasks()), "direct": 1, "observed": 2}

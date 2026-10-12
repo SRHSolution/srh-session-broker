@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from . import herdr as herdr_mod
+from .i18n import stored, tr
 from .models import BrokerError, Task, TaskStatus
 
 ACTIVE = ("queued", "running", "delivered", "held", "needs_routing")
@@ -49,21 +50,22 @@ def _hold_reason(t: Task) -> str:
     srcs = [x.removeprefix("rule:") for x in sf.get("sources") or [] if x.startswith("rule:")]
     targets = [x.split("=", 1)[1] for x in srcs if x.startswith("target=")]
     actions = [x.split("=", 1)[1] for x in srcs if x.startswith("action=")]
-    parts = [{"hw-code": "장비 제어 코드 변경", "irreversible": "되돌리기 어려운 작업·중요 코드 변경"}.get(
-        (rm.get("policy") or {}).get("approval"), "사람 승인 필요")]
+    parts = [tr({"hw-code": "장비 제어 코드 변경", "irreversible": "되돌리기 어려운 작업·중요 코드 변경"}.get(
+        (rm.get("policy") or {}).get("approval"), "사람 승인 필요"))]
     if targets:
-        parts.append(f"대상 {', '.join(dict.fromkeys(targets))}" + (f" + 동작 {', '.join(dict.fromkeys(actions))}" if actions else ""))
+        tg, ac = ", ".join(dict.fromkeys(targets)), ", ".join(dict.fromkeys(actions))
+        parts.append(tr("대상 {targets} + 동작 {actions}", targets=tg, actions=ac) if actions else tr("대상 {targets}", targets=tg))
     if sf.get("needs_human"):
-        parts.append(f"Jev 사람 승인 필요 {_pct(sf['needs_human'])}")
+        parts.append(tr("Jev 사람 승인 필요 {pct}", pct=_pct(sf["needs_human"])))
     return " · ".join(parts)
 
 
 def _task_row(t: Task) -> dict[str, Any]:
     c, s, f = _ts(t.created_at), _ts(t.started_at), _ts(t.finished_at)
     rm = t.route_meta or {}
-    return {**t.summary(), "started_at": t.started_at, "error": t.error,
+    return {**t.summary(), "started_at": t.started_at, "error": stored(t.error),
             "wait_s": round(s - c, 1) if c and s else None, "total_s": round(f - c, 1) if c and f else None,
-            "reason": rm.get("reason"), "jev": (rm.get("jev") or {}).get("probs"),
+            "reason": stored(rm.get("reason")), "jev": (rm.get("jev") or {}).get("probs"),
             "safety": rm.get("safety")}
 
 
@@ -164,15 +166,15 @@ def snapshot(b: Any, *, task_limit: int = 50, flow_limit: int = 100) -> dict[str
         sessions.append(row)
         if state == "closed" and row["queued"]:
             attention.append({"kind": "closed-pane", "session": s.name,
-                              "title": f"{s.name} 창이 닫혀 있어 메시지 {row['queued']}건이 대기 중",
-                              "detail": "창을 열면(resume) 데몬이 넣습니다."})
+                              "title": tr("{name} 창이 닫혀 있어 메시지 {n}건이 대기 중", name=s.name, n=row["queued"]),
+                              "detail": tr("창을 열면(resume) 데몬이 넣습니다.")})
         if state == "mismatch":
             other = b.title_owner(t) if (t := herdr_mod.title_name(a)) else None
-            why = (f"그 창은 '{other}' 세션 창입니다(창 제목). 이 세션은 창 없이(백그라운드 등) 실행 중일 수 있습니다"
-                   if other else "종류·폴더가 다릅니다")
-            attention.append({"kind": "mismatch", "session": s.name, "title": f"{s.name}: herdr 창 짝 불일치",
-                              "detail": f"herdr 가 창 {row['pane_id']} 을 이 세션으로 보지만 {why}. "
-                                        "메시지는 이 세션이 응답을 마칠 때 받습니다. 바로 받게 하려면 자기 창에서 다시 여세요."})
+            why = (tr("그 창은 '{other}' 세션 창입니다(창 제목). 이 세션은 창 없이(백그라운드 등) 실행 중일 수 있습니다", other=other)
+                   if other else tr("종류·폴더가 다릅니다"))
+            attention.append({"kind": "mismatch", "session": s.name, "title": tr("{name}: herdr 창 짝 불일치", name=s.name),
+                              "detail": tr("herdr 가 창 {pane} 을 이 세션으로 보지만 {why}. 메시지는 이 세션이 응답을 마칠 때 "
+                                           "받습니다. 바로 받게 하려면 자기 창에서 다시 여세요.", pane=row["pane_id"], why=why)})
 
     for st, kind in (("held", "approve"), ("needs_routing", "route")):
         for t in b.store.list_tasks(status=st, limit=50):
@@ -184,18 +186,20 @@ def snapshot(b: Any, *, task_limit: int = 50, flow_limit: int = 100) -> dict[str
         for t in b.store.list_tasks(status=st, limit=20):
             if (t.finished_at or t.created_at) >= day_ago:
                 attention.append({"kind": "failed", "task_id": t.id, "title": t.title, "from": t.from_addr,
-                                  "to": t.to_addr, "detail": (t.error or "")[:200]})
+                                  "to": t.to_addr, "detail": (stored(t.error) or "")[:200]})
 
     daemon = daemon_state(home)
     if not daemon["running"]:
-        attention.insert(0, {"kind": "engine", "title": "데몬이 실행 중이 아닙니다",
-                             "detail": "herdr 창 하나에서 `srhbroker daemon` 을 띄우세요."})
+        from .plugin import START_ENGINE_CMD
+        attention.insert(0, {"kind": "engine", "title": tr("데몬이 실행 중이 아닙니다"),
+                             "detail": tr("herdr 창 하나에서 `srhbroker daemon` 을 띄우세요 (플러그인: `{cmd}`).",
+                                          cmd=START_ENGINE_CMD)})
     elif not daemon.get("legacy") and not daemon.get("herdr"):
-        attention.insert(0, {"kind": "engine", "title": "데몬이 herdr 창 밖에서 실행 중",
-                             "detail": "interactive 세션에 바로 넣지 못합니다. herdr 창에서 다시 띄우세요."})
+        attention.insert(0, {"kind": "engine", "title": tr("데몬이 herdr 창 밖에서 실행 중"),
+                             "detail": tr("interactive 세션에 바로 넣지 못합니다. herdr 창에서 다시 띄우세요.")})
     elif daemon.get("restart_needed") or daemon.get("legacy"):
-        attention.insert(0, {"kind": "engine", "title": "데몬 재시작 필요",
-                             "detail": "데몬 시작 뒤 코드가 바뀌었습니다. Ctrl+C 후 `srhbroker daemon`."})
+        attention.insert(0, {"kind": "engine", "title": tr("데몬 재시작 필요"),
+                             "detail": tr("데몬 시작 뒤 코드가 바뀌었습니다. Ctrl+C 후 `srhbroker daemon`.")})
 
     tasks = [_task_row(t) for t in b.store.list_tasks(limit=task_limit)]
 
@@ -230,14 +234,14 @@ def _pct(v: Any) -> str:
 
 def relay_timeline(b: Any, t: Task) -> list[dict[str, Any]]:
     """broker 중계 작업의 경과: 보냄 → 라우팅·Jev·안전 판단 → (승인) → 받는 창에 들어감 → 회신 → 보낸 창에 알림.
-    각 항목: at(ISO), step(짧은 이름), text(설명), tone(ok|wait|bad|info)."""
+    각 항목: at(ISO), step(짧은 이름), text(설명), tone(ok|wait|bad|info). step 은 한국어로 모아 순서를 정한 뒤 번역한다."""
     ev: list[dict[str, Any]] = []
     rm = t.route_meta or {}
     rcv = b.store.get_session(t.to_addr) if t.to_addr else None
     snd = b.store.get_session(t.from_addr)
-    kind = {"task": "작업 (회신 필요)", "message": "메시지 (회신 없음)", "reply": "회신 알림"}.get(t.kind.value, t.kind.value)
+    kind = tr({"task": "작업 (회신 필요)", "message": "메시지 (회신 없음)", "reply": "회신 알림"}.get(t.kind.value, t.kind.value))
     ev.append({"at": t.created_at, "step": "보냄", "tone": "info",
-               "text": f"{t.from_addr} → {t.to_hint or t.to_addr or '(대상 생략)'} · {kind}"})
+               "text": f"{t.from_addr} → {t.to_hint or t.to_addr or tr('(대상 생략)')} · {kind}"})
     logs = [r for r in sorted(b.store.route_log(500), key=lambda x: x["id"]) if r["task_id"] == t.id]
     approved = next((r for r in logs if r["router"] == "approve"), None)
     for r in logs:
@@ -245,32 +249,39 @@ def relay_timeline(b: Any, t: Task) -> list[dict[str, Any]]:
         if r["router"] == "jev":
             probs = meta.get("probs") or {}
             top = max(probs.items(), key=lambda kv: kv[1]) if probs else None
-            text = ("Jev 판단: " + (f"{top[0]} {_pct(top[1])}" if top else "역할 선택 없음 (이름 지정)")
-                    + f" · 하드웨어 위험 {_pct(meta.get('hw_risk'))} · 사람 승인 필요 {_pct(meta.get('needs_human'))}"
-                    + ("" if r["applied"] else " · 참고만 (적용 안 함)") + (f" · 오류 {meta['error']}" if meta.get("error") else ""))
+            text = (tr("Jev 판단: {top}", top=f"{top[0]} {_pct(top[1])}" if top else tr("역할 선택 없음 (이름 지정)"))
+                    + tr(" · 하드웨어 위험 {pct}", pct=_pct(meta.get("hw_risk")))
+                    + tr(" · 사람 승인 필요 {pct}", pct=_pct(meta.get("needs_human")))
+                    + ("" if r["applied"] else tr(" · 참고만 (적용 안 함)"))
+                    + (tr(" · 오류 {error}", error=meta["error"]) if meta.get("error") else ""))
             ev.append({"at": r["created_at"], "step": "Jev", "tone": "info", "text": text})
         elif r["router"] == "approve":
             perm = meta.get("sandbox")
+            via = {"mcp": "세션 대화창", "cli": "터미널", "dashboard": "대시보드", "watch": "watch 화면"}.get(meta.get("via"))
             ev.append({"at": r["created_at"], "step": "승인", "tone": "ok",
-                       "text": f"{ {'mcp': '세션 대화창', 'cli': '터미널', 'dashboard': '대시보드', 'watch': 'watch 화면'}.get(meta.get('via'), meta.get('via', '?')) } 에서 승인"
-                               + (f" — “{meta['confirmation']}”" if meta.get("confirmation") else "")
-                               + (f" · 권한 {perm}" if perm else "")})
+                       "text": tr("{via} 에서 승인", via=tr(via) if via else meta.get("via", "?"))
+                               + (f" — “{stored(meta['confirmation'])}”" if meta.get("confirmation") else "")
+                               + (tr(" · 권한 {perm}", perm=perm) if perm else "")})
         elif r["router"] == "cancel":
             who = meta.get("by")
+            was = {"queued": "넣기 전", "delivered": "받는 쪽이 처리 중", "held": "승인 대기 중", "needs_routing": "대상 미정 상태",
+                   "running": "실행 중"}.get(meta.get("was"))
+            was = tr(was) if was else meta.get("was", "")
             ev.append({"at": r["created_at"], "step": "취소", "tone": "bad",
-                       "text": ("사람(터미널·대시보드)이" if who == "user" else f"{who} 가" if who and who != "?" else "")
-                               + f" 취소 ({ {'queued': '넣기 전', 'delivered': '받는 쪽이 처리 중', 'held': '승인 대기 중', 'needs_routing': '대상 미정 상태', 'running': '실행 중'}.get(meta.get('was'), meta.get('was', '')) })"})
+                       "text": tr("사람(터미널·대시보드)이 취소 ({was})", was=was) if who == "user"
+                               else tr("{who} 가 취소 ({was})", who=who, was=was) if who and who != "?"
+                               else tr("취소 ({was})", was=was)})
         elif r["router"] == "drop":
             ev.append({"at": r["created_at"], "step": "소멸", "tone": "bad",
-                       "text": f"{r['decision']} 창이 닫혀 있어 알림을 기다리지 않고 버림 (알림은 대기열에 두지 않음)"})
+                       "text": tr("{name} 창이 닫혀 있어 알림을 기다리지 않고 버림 (알림은 대기열에 두지 않음)", name=r["decision"])})
         elif r["router"] == "user":
-            ev.append({"at": r["created_at"], "step": "대상 지정", "tone": "ok", "text": f"사람이 대상을 {r['decision']} 로 지정"})
+            ev.append({"at": r["created_at"], "step": "대상 지정", "tone": "ok", "text": tr("사람이 대상을 {to} 로 지정", to=r["decision"])})
         else:
             how = {"name": "이름 일치", "alias": "별칭 일치", "role": "역할", "rules": "규칙", "jev": "Jev 판단",
-                   "only": "유일한 후보", "none": "대상 못 정함"}.get(r["router"], r["router"])
+                   "only": "유일한 후보", "none": "대상 못 정함"}.get(r["router"])
             ev.append({"at": r["created_at"], "step": "라우팅", "tone": "wait" if not r["decision"] else "info",
-                       "text": f"{how} → {r['decision'] or '대상 미정 (사람이 지정해야 함)'}"
-                               + (f" · {meta['reason']}" if meta.get("reason") and meta.get("reason") != f"{r['router']} 일치" else "")})
+                       "text": f"{tr(how) if how else r['router']} → {r['decision'] or tr('대상 미정 (사람이 지정해야 함)')}"
+                               + (f" · {stored(meta['reason'])}" if meta.get("reason") and meta.get("reason") != f"{r['router']} 일치" else "")})
     sf = rm.get("safety") or {}
     srcs = [x.removeprefix("rule:") for x in sf.get("sources") or [] if x.startswith("rule:")]
     pick = lambda key: [x.split("=", 1)[1] for x in srcs if x.startswith(key + "=")]
@@ -279,26 +290,28 @@ def relay_timeline(b: Any, t: Task) -> list[dict[str, Any]]:
     forced = float(sf.get("hw_risk") or 0) >= float(b.router.jcfg.get("hw_risk_threshold", 0.2))
     held = approved is not None or t.status.value == "held"
     pol = rm.get("policy") or {}
-    skip = {"user": "사용자가 직접 지시한 작업 — 승인 생략" + (f": “{pol['user_request']}”" if pol.get("user_request") else ""),
-            "notice": "알림·회신이라 승인 대상 아님", "read-only": "읽기 전용 요청이라 승인 대상 아님",
-            "hw-read-only": "장비 관련이지만 변경을 실행하게 하는 요청은 아님 — 승인 없이 읽기 전용으로 전달"}.get(pol.get("approval"))
+    skip = {"user": tr("사용자가 직접 지시한 작업 — 승인 생략") + (f": “{pol['user_request']}”" if pol.get("user_request") else ""),
+            "notice": tr("알림·회신이라 승인 대상 아님"), "read-only": tr("읽기 전용 요청이라 승인 대상 아님"),
+            "hw-read-only": tr("장비 관련이지만 변경을 실행하게 하는 요청은 아님 — 승인 없이 읽기 전용으로 전달")}.get(pol.get("approval"))
     if skip and (srcs or forced or float(sf.get("needs_human") or 0) >= 0.3):
         ev.append({"at": t.created_at, "step": "승인 판단", "tone": "ok", "text": skip})
     if srcs or held or forced:
         when = next((r["created_at"] for r in logs if r["router"] == "jev"), t.created_at)
         parts = []
-        lowered = "→ 사용자 직접 지시라 요청한 권한 유지" if pol.get("approval") == "user" else "→ 읽기 전용으로 낮춤"
+        lowered = tr("→ 사용자 직접 지시라 요청한 권한 유지" if pol.get("approval") == "user" else "→ 읽기 전용으로 낮춤")
         if targets and actions:
-            parts.append(f"하드웨어 대상({', '.join(targets)}) + 제어 동작({', '.join(actions)}) {lowered}")
+            parts.append(tr("하드웨어 대상({targets}) + 제어 동작({actions}) {lowered}",
+                            targets=", ".join(targets), actions=", ".join(actions), lowered=lowered))
         elif legacy:
-            parts.append(f"하드웨어 경계면 규칙(" + ", ".join(legacy) + ")에 걸려 읽기 전용으로 낮춤")
+            parts.append(tr("하드웨어 경계면 규칙({rules})에 걸려 읽기 전용으로 낮춤", rules=", ".join(legacy)))
         elif forced:
-            parts.append(f"Jev 하드웨어 위험 판단 {lowered}")
+            parts.append(tr("Jev 하드웨어 위험 판단 {lowered}", lowered=lowered))
         elif domain:
-            parts.append(f"영상·장비 용어({', '.join(domain)})만 있어 위험을 소폭 반영 (읽기 전용 아님)")
+            parts.append(tr("영상·장비 용어({terms})만 있어 위험을 소폭 반영 (읽기 전용 아님)", terms=", ".join(domain)))
         if held:
-            parts.append("장비 제어 코드 변경 → 승인 대기로 보류" if pol.get("approval") == "hw-code"
-                         else f"사람 승인 필요 {_pct(sf.get('needs_human'))} (되돌리기 어려운 작업·중요 코드 변경) → 승인 대기로 보류")
+            parts.append(tr("장비 제어 코드 변경 → 승인 대기로 보류") if pol.get("approval") == "hw-code"
+                         else tr("사람 승인 필요 {pct} (되돌리기 어려운 작업·중요 코드 변경) → 승인 대기로 보류",
+                                 pct=_pct(sf.get("needs_human"))))
         ev.append({"at": when, "step": "안전 판단", "tone": "wait", "text": " · ".join(parts)})
     if t.started_at:
         pushed = b.store.push_times(t.to_addr, _iso_shift(t.started_at, -3), _iso_shift(t.started_at, 3)) if t.to_addr else []
@@ -308,39 +321,42 @@ def relay_timeline(b: Any, t: Task) -> list[dict[str, Any]]:
             how, step = "herdr 로 받는 창에 바로 넣음", "전달"
         else:
             how, step = "받는 쪽이 응답을 마칠 때(Stop hook)나 inbox 로 가져감", "전달"
-        ev.append({"at": t.started_at, "step": step, "tone": "ok", "text": f"{t.to_addr} — {how}"})
+        ev.append({"at": t.started_at, "step": step, "tone": "ok", "text": f"{t.to_addr} — {tr(how)}"})
     elif t.status.value == "queued" and rcv and rcv.mode.value == "interactive":
-        ev.append({"at": None, "step": "대기", "tone": "wait", "text": f"{t.to_addr} 창에 아직 넣지 못함 (창이 닫혀 있거나 승인 창)"})
+        ev.append({"at": None, "step": "대기", "tone": "wait", "text": tr("{to} 창에 아직 넣지 못함 (창이 닫혀 있거나 승인 창)", to=t.to_addr)})
     if t.finished_at and not (t.kind.value != "task" and t.status.value == "done"):   # message·reply 는 넣으면 끝
         label = {"done": ("회신", "ok", "완료로 회신"), "failed": ("회신", "bad", "실패로 회신"),
                  "timeout": ("만료", "bad", "기한 초과"), "cancelled": ("취소", "bad", "취소됨")}.get(
             t.status.value, (t.status.value, "info", t.status.value))
         if t.status.value != "cancelled" or not any(r["router"] in ("cancel", "drop") for r in logs):   # 취소·소멸은 위에서 보여 줌
             ev.append({"at": t.finished_at, "step": label[0], "tone": label[1],
-                       "text": label[2] + (f" — {t.error}" if t.error and t.error != "취소됨" and t.status.value != "done" else "")})
+                       "text": tr(label[2]) + (f" — {stored(t.error)}" if t.error and t.error != "취소됨" and t.status.value != "done" else "")})
         if snd and snd.mode.value == "interactive":
             back = b.store.push_times(t.from_addr, _iso_shift(t.finished_at, -3), _iso_shift(t.finished_at, 120))
             if back:
-                ev.append({"at": back[0], "step": "알림", "tone": "ok", "text": f"결과를 보낸 창({t.from_addr})에 바로 넣음"})
+                ev.append({"at": back[0], "step": "알림", "tone": "ok", "text": tr("결과를 보낸 창({name})에 바로 넣음", name=t.from_addr)})
     base = datetime.fromisoformat(t.created_at)
     for e in ev:
         e["after_s"] = round((datetime.fromisoformat(e["at"]) - base).total_seconds()) if e["at"] else None
     order = {"보냄": 0, "라우팅": 1, "Jev": 2, "안전 판단": 3}
-    return sorted(ev, key=lambda e: (e["at"] is None, e["at"] or "", order.get(e["step"], 9)))
+    ev.sort(key=lambda e: (e["at"] is None, e["at"] or "", order.get(e["step"], 9)))
+    for e in ev:
+        e["step"] = tr(e["step"])
+    return ev
 
 
 def direct_timeline(d: dict[str, Any]) -> list[dict[str, Any]]:
-    ev = [{"at": d["created_at"], "step": "보냄", "tone": "info", "after_s": 0,
-           "text": f"{d['from_name']} → {d['to_name']} · 같은 provider 직접 전달 (broker 작업 아님)"}]
+    ev = [{"at": d["created_at"], "step": tr("보냄"), "tone": "info", "after_s": 0,
+           "text": f"{d['from_name']} → {d['to_name']} · " + tr("같은 provider 직접 전달 (broker 작업 아님)")}]
     if d["status"] == "delivered" and d["delivered_at"]:
-        ev.append({"at": d["delivered_at"], "step": "전달", "tone": "ok", "text": "herdr 로 받는 창에 넣음",
+        ev.append({"at": d["delivered_at"], "step": tr("전달"), "tone": "ok", "text": tr("herdr 로 받는 창에 넣음"),
                    "after_s": round((datetime.fromisoformat(d["delivered_at"]) - datetime.fromisoformat(d["created_at"])).total_seconds())})
     elif d["status"] == "queued":
-        ev.append({"at": None, "step": "대기", "tone": "wait", "after_s": None, "text": "받는 창이 열리거나 풀리면 넣음"})
+        ev.append({"at": None, "step": tr("대기"), "tone": "wait", "after_s": None, "text": tr("받는 창이 열리거나 풀리면 넣음")})
     else:
-        ev.append({"at": None, "step": {"cancelled": "취소", "expired": "만료", "dropped": "소멸"}.get(d["status"], d["status"]),
-                   "tone": "bad", "after_s": None,
-                   "text": "받는 창이 닫혀 있어 알림을 버림" if d["status"] == "dropped" else "넣지 않고 끝남"})
+        step = {"cancelled": "취소", "expired": "만료", "dropped": "소멸"}.get(d["status"])
+        ev.append({"at": None, "step": tr(step) if step else d["status"], "tone": "bad", "after_s": None,
+                   "text": tr("받는 창이 닫혀 있어 알림을 버림" if d["status"] == "dropped" else "넣지 않고 끝남")})
     return ev
 
 
@@ -348,31 +364,31 @@ def task_detail(b: Any, task_id: str) -> dict[str, Any]:
     if task_id.startswith("f_"):
         f = b.store.get_flow(int(task_id[2:])) if task_id[2:].isdigit() else None
         if not f:
-            raise BrokerError(f"관찰 기록 {task_id} 이 없습니다")
+            raise BrokerError(tr("관찰 기록 {id} 이 없습니다", id=task_id))
         body = f["summary"] or ""
         frm = f["from_name"] or _native_name(f["from_native"])
         to = f["to_name"] or f["to_raw"]
         n = int(b.cfg.data.get("monitor", {}).get("store_body_chars", 2000))
         return {"task_id": task_id, "kind": "native", "from": frm, "to": to, "title": body.partition("\n")[0][:80],
                 "status": f["status"], "routed_by": "claude-native", "created_at": f["at"], "finished_at": None,
-                "body": body or "(본문을 저장하지 않았습니다 — [monitor] store_body_chars)", "acceptance": [],
+                "body": body or tr("(본문을 저장하지 않았습니다 — [monitor] store_body_chars)"), "acceptance": [],
                 "result": None, "error": None, "jev": None, "safety": None, "terminal": True, "route_log": [],
-                "note": (f"Claude 자체 SendMessage 를 관찰한 기록입니다 (broker 가 전달하지 않음). 본문은 앞 {n}자까지만 저장되며, "
-                         "이전 기록은 200자까지만 남아 있습니다."),
+                "note": tr("Claude 자체 SendMessage 를 관찰한 기록입니다 (broker 가 전달하지 않음). 본문은 앞 {n}자까지만 "
+                           "저장되며, 이전 기록은 200자까지만 남아 있습니다.", n=n),
                 "teammate": not f["to_name"],
-                "timeline": [{"at": f["at"], "step": "보냄", "tone": "info", "after_s": 0,
+                "timeline": [{"at": f["at"], "step": tr("보냄"), "tone": "info", "after_s": 0,
                               "text": f"{frm} → {f['to_raw']} · Claude SendMessage"
-                                      + ("" if f["to_name"] else " (세션 안 에이전트 팀원 또는 미등록 대상)")}],
+                                      + ("" if f["to_name"] else tr(" (세션 안 에이전트 팀원 또는 미등록 대상)"))}],
                 "from_session": _sess(b, f["from_name"]), "to_session": _sess(b, f["to_name"])}
     if task_id.startswith("d_"):
         d = b.store.get_direct(task_id)
         if not d:
-            raise BrokerError(f"직접 전달 {task_id} 이 없습니다")
+            raise BrokerError(tr("직접 전달 {id} 이 없습니다", id=task_id))
         req = d["request"]
         c, f = _ts(d["created_at"]), _ts(d["delivered_at"])
         return {"task_id": d["id"], "kind": "direct", "from": d["from_name"], "to": d["to_name"],
                 "title": req.get("title") or (req.get("body") or "")[:80], "status": d["status"],
-                "routed_by": "direct", "reason": "같은 provider 직접 전달 (broker 작업 아님)",
+                "routed_by": "direct", "reason": tr("같은 provider 직접 전달 (broker 작업 아님)"),
                 "created_at": d["created_at"], "finished_at": d["delivered_at"], "body": req.get("body"),
                 "acceptance": req.get("acceptance"), "wait_s": round(f - c, 1) if c and f else None,
                 "total_s": None, "result": None, "error": None, "jev": None, "safety": None,
