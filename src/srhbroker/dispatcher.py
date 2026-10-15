@@ -180,6 +180,9 @@ class Dispatcher:
                     expired = await asyncio.to_thread(self.broker.expire_stale)
                     if expired:
                         log.info("대기 기한 초과로 만료: %s", expired)
+                    overdue = await asyncio.to_thread(self.broker.flag_overdue)
+                    if overdue:
+                        log.info("회신 지연 알림: %s", overdue)
                 if n % 5 == 0:
                     self.write_state(started)
                 if n % 600 == 0:  # 약 10분마다: 새 버전 확인 (네트워크는 check_hours 마다, 그 사이는 캐시)

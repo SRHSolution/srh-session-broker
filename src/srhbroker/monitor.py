@@ -116,18 +116,21 @@ def search_flows(b: Any, *, q: str | None = None, kind: str | None = None, sessi
              if since_hours else None)
     st = STATUS_GROUPS.get(status or "")
     rows: list[dict[str, Any]] = []
+    deferred = b.store.deferred_ids()   # 작업 중에 와서 미뤄 둔 요청 (상태는 queued)
     if kind in (None, "broker"):
         for t in b.store.search_tasks(q=q, session=session, statuses=st[0] if st else None, since=since, limit=limit):
             rows.append({"id": t.id, "task_id": t.id, "at": t.created_at, "transport": "broker", "from": t.from_addr,
                          "to": t.to_addr, "status": t.status.value, "summary": t.title,
-                         "excerpt": _rest(t.body, t.title), "kind": t.kind.value, "teammate": False})
+                         "excerpt": _rest(t.body, t.title), "kind": t.kind.value, "teammate": False,
+                         "deferred": t.id in deferred})
     if kind in (None, "herdr-direct"):
         for d in b.store.search_direct(q=q, session=session, statuses=st[1] if st else None, since=since, limit=limit):
             req = d["request"]
             first = req.get("title") or (req.get("body") or "").partition("\n")[0][:120]
             rows.append({"id": d["id"], "task_id": d["id"], "at": d["created_at"], "transport": "herdr-direct",
                          "from": d["from_name"], "to": d["to_name"], "status": d["status"], "summary": first,
-                         "excerpt": _rest(req.get("body"), first), "kind": req.get("kind"), "teammate": False})
+                         "excerpt": _rest(req.get("body"), first), "kind": req.get("kind"), "teammate": False,
+                         "deferred": d["id"] in deferred})
     if kind in (None, "claude-native"):
         for f in b.store.search_flow_log(q=q, session=session, statuses=st[2] if st else None, since=since,
                                          teammates=teammates, limit=limit):
@@ -163,6 +166,7 @@ def snapshot(b: Any, *, task_limit: int = 50, flow_limit: int = 100) -> dict[str
                "agent_status": a.get("agent_status") if a else None,
                **{k: c.get(k, 0) for k in ACTIVE}}
         row["queued"] += b.store.direct_queued_count(s.name)   # 같은 provider 직접 전달 대기분 포함
+        row["deferred"] = len(b.store.deferred(s.name))         # 그중 작업 중에 와서 미뤄 둔 것
         sessions.append(row)
         if state == "closed" and row["queued"]:
             attention.append({"kind": "closed-pane", "session": s.name,
@@ -181,6 +185,15 @@ def snapshot(b: Any, *, task_limit: int = 50, flow_limit: int = 100) -> dict[str
             attention.append({"kind": kind, "task_id": t.id, "title": t.title, "from": t.from_addr, "to": t.to_addr,
                               "age_s": int(now.timestamp() - (_ts(t.created_at) or 0)),
                               "detail": _hold_reason(t) if kind == "approve" else (t.route_meta or {}).get("suggestion")})
+    overdue_s = int(b.cfg.broker.get("reply_overdue_s", 14400))
+    if overdue_s > 0:
+        for t in b.store.list_tasks(status="delivered", limit=200):
+            age = now.timestamp() - (_ts(t.started_at) or now.timestamp())
+            if t.kind.value == "task" and age >= overdue_s:
+                attention.append({"kind": "overdue", "task_id": t.id, "title": t.title, "from": t.from_addr,
+                                  "to": t.to_addr, "age_s": int(age),
+                                  "detail": tr("{to} 이(가) {h}시간째 회신하지 않았습니다. 내용을 확인하고 필요 없으면 취소하세요.",
+                                               to=t.to_addr, h=round(age / 3600, 1))})
     day_ago = (now - timedelta(hours=24)).isoformat(timespec="seconds")
     for st in ("failed", "timeout"):
         for t in b.store.list_tasks(status=st, limit=20):
@@ -268,12 +281,47 @@ def relay_timeline(b: Any, t: Task) -> list[dict[str, Any]]:
                    "running": "실행 중"}.get(meta.get("was"))
             was = tr(was) if was else meta.get("was", "")
             ev.append({"at": r["created_at"], "step": "취소", "tone": "bad",
-                       "text": tr("사람(터미널·대시보드)이 취소 ({was})", was=was) if who == "user"
-                               else tr("{who} 가 취소 ({was})", who=who, was=was) if who and who != "?"
-                               else tr("취소 ({was})", was=was)})
+                       "text": (tr("사람(터미널·대시보드)이 취소 ({was})", was=was) if who == "user"
+                                else tr("{who} 가 취소 ({was})", who=who, was=was) if who and who != "?"
+                                else tr("취소 ({was})", was=was))
+                               + (tr(" — 뒤에 온 {via} 를 취소 요청으로 보고 broker 가 넣기 전에 취소", via=meta["via"])
+                                  if meta.get("via") else "")})
         elif r["router"] == "drop":
             ev.append({"at": r["created_at"], "step": "소멸", "tone": "bad",
                        "text": tr("{name} 창이 닫혀 있어 알림을 기다리지 않고 버림 (알림은 대기열에 두지 않음)", name=r["decision"])})
+        elif r["router"] == "defer":
+            if meta.get("by") == "agent":
+                text = tr("받는 세션이 지금 하던 작업과 무관하다며 미룸 — 지금 작업을 마친 뒤 넣음")
+                text += f" — “{meta['note']}”" if meta.get("note") else ""
+            else:
+                text = tr("작업 중에 도착 — 지금 작업과 무관하다고 보고 지금 작업을 마친 뒤 넣도록 미룸 ({how})", how=_triage_how(meta))
+            if meta.get("working_on"):
+                text += tr(" · 하던 작업: {titles}", titles=", ".join(meta["working_on"]))
+            if meta.get("priority_high"):
+                text += tr(" · 급한 요청으로 보고 미룬 요청 맨 앞에 둠 (Jev {pct})", pct=_pct(meta.get("priority")))
+            ev.append({"at": r["created_at"], "step": "미룸", "tone": "wait", "text": text})
+        elif r["router"] == "relate":
+            target, applied = r["decision"], meta.get("applied")
+            how = _relate_how(meta)
+            text = {"cancelled": tr("대기 중이던 {target} 을(를) 취소하는 메시지로 보고 넣기 전에 취소함 ({how})", target=target, how=how),
+                    "replaced": tr("대기 중이던 {target} 을(를) 취소하고 대신 하라는 새 요청으로 보고, 그 요청을 넣기 전에 취소함 ({how})",
+                                   target=target, how=how),
+                    "new": tr("대기 중인 요청과 무관한 새 요청으로 판단 ({how})", how=how)}.get(applied)
+            if applied == "bundled":
+                text = (tr("대기 중인 {target} 을(를) 고치는 내용으로 보고 함께 넣도록 묶음 ({how})", target=target, how=how)
+                        if meta.get("relation") == "modify" else
+                        tr("대기 중인 {target} 을(를) 취소하려는 것으로 보이나 확실하지 않아 함께 넣도록 묶음 ({how})",
+                           target=target, how=how))
+            ev.append({"at": r["created_at"], "step": "관계 판단", "tone": "bad" if applied == "cancelled" else "info",
+                       "text": text or how})
+        elif r["router"] == "triage":
+            ev.append({"at": r["created_at"], "step": "바로 넣음", "tone": "info",
+                       "text": tr("작업 중에 도착 — 지금 작업과 관련(취소·수정·우선순위)으로 보고 바로 넣음 ({how})",
+                                  how=_triage_how(meta))})
+        elif r["router"] == "overdue":
+            ev.append({"at": r["created_at"], "step": "회신 지연", "tone": "bad",
+                       "text": tr("넣은 뒤 {h}시간 동안 회신이 없어 보낸 세션에 알림",
+                                  h=round(float(meta.get("after_s") or 0) / 3600, 1))})
         elif r["router"] == "user":
             ev.append({"at": r["created_at"], "step": "대상 지정", "tone": "ok", "text": tr("사람이 대상을 {to} 로 지정", to=r["decision"])})
         else:
@@ -323,7 +371,10 @@ def relay_timeline(b: Any, t: Task) -> list[dict[str, Any]]:
             how, step = "받는 쪽이 응답을 마칠 때(Stop hook)나 inbox 로 가져감", "전달"
         ev.append({"at": t.started_at, "step": step, "tone": "ok", "text": f"{t.to_addr} — {tr(how)}"})
     elif t.status.value == "queued" and rcv and rcv.mode.value == "interactive":
-        ev.append({"at": None, "step": "대기", "tone": "wait", "text": tr("{to} 창에 아직 넣지 못함 (창이 닫혀 있거나 승인 창)", to=t.to_addr)})
+        order = [d["item_id"] for d in b.store.deferred(rcv.name)]
+        ev.append({"at": None, "step": "대기", "tone": "wait",
+                   "text": tr("{to} 이(가) 지금 작업을 마치면 넣음 (미룬 요청 {n}번째)", to=t.to_addr, n=order.index(t.id) + 1)
+                   if t.id in order else tr("{to} 창에 아직 넣지 못함 (창이 닫혀 있거나 승인 창)", to=t.to_addr)})
     if t.finished_at and not (t.kind.value != "task" and t.status.value == "done"):   # message·reply 는 넣으면 끝
         label = {"done": ("회신", "ok", "완료로 회신"), "failed": ("회신", "bad", "실패로 회신"),
                  "timeout": ("만료", "bad", "기한 초과"), "cancelled": ("취소", "bad", "취소됨")}.get(
@@ -343,6 +394,28 @@ def relay_timeline(b: Any, t: Task) -> list[dict[str, Any]]:
     for e in ev:
         e["step"] = tr(e["step"])
     return ev
+
+
+def _triage_how(meta: dict[str, Any]) -> str:
+    """작업 중 도착 판단의 근거: Jev 확률·규칙에 걸린 말."""
+    parts = []
+    if meta.get("jev") is not None:
+        parts.append(tr("Jev 바로 반영 필요 {pct}", pct=_pct(meta["jev"])))
+    if meta.get("rules"):
+        parts.append(tr("규칙: {words}", words=", ".join(dict.fromkeys(meta["rules"]))))
+    if not parts:
+        parts.append(tr("규칙: 해당 말 없음"))
+    return " · ".join(parts)
+
+
+def _relate_how(meta: dict[str, Any]) -> str:
+    """대기 요청과의 관계 판단 근거: Jev 관계 확률 또는 규칙에 걸린 말."""
+    label = {"cancel": "취소|관계", "replace": "취소 후 대체", "modify": "수정", "new": "새 요청"}.get(meta.get("relation") or "")
+    if meta.get("by") == "jev" and meta.get("p") is not None:
+        return tr("Jev {rel} {pct}", rel=tr(label) if label else meta.get("relation"), pct=_pct(meta["p"]))
+    if meta.get("rules"):
+        return tr("규칙: {words}", words=", ".join(dict.fromkeys(meta["rules"])))
+    return tr("규칙: 해당 말 없음")
 
 
 def direct_timeline(d: dict[str, Any]) -> list[dict[str, Any]]:
@@ -394,7 +467,7 @@ def task_detail(b: Any, task_id: str) -> dict[str, Any]:
                 "total_s": None, "result": None, "error": None, "jev": None, "safety": None,
                 "terminal": d["status"] != "queued", "route_log": [], "timeline": direct_timeline(d)}
     t = b.store.require_task(task_id)
-    return {**_task_row(t), "body": t.body, "result": t.result, "acceptance": t.acceptance,
+    return {**_task_row(t), "deferred": t.id in b.store.deferred_ids(), "body": t.body, "result": t.result, "acceptance": t.acceptance,
             "route_meta": t.route_meta, "finished_at": t.finished_at,
             "terminal": TaskStatus(t.status).terminal,
             "route_log": [r for r in b.store.route_log(200) if r["task_id"] == task_id],

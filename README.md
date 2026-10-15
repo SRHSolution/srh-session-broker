@@ -143,6 +143,8 @@ The engine is `srhbroker daemon`. It is the same program with or without the plu
 
 - runs tasks for `worker` sessions;
 - types in tasks and replies that were waiting for a closed pane, once that pane opens (it checks every second);
+- types in requests that were [deferred while the receiver was busy](#requests-that-arrive-while-a-pane-is-working), one at a time once the pane is free;
+- tells the sender when delivered work has had no reply for `[broker] reply_overdue_s` (4 hours by default);
 - expires work left in held, needs_routing or queued for longer than `[broker] stale_after_s` (24 hours by default);
 - checks for new releases.
 
@@ -284,14 +286,40 @@ Without `TYPESAFE_API_KEY`, or if Jev fails, routing keeps working with names, r
 - The broker finds a pane through `herdr agent list`: `agent_session.value` is the registered session ID. Pane IDs change when panes move, so they are never stored.
 - herdr pairs a pane with whichever Claude process last reported in it. A background or nested session started from that pane can take the pairing. The broker therefore checks that the agent kind and folder match, and that the pane title (Claude uses the session name) is not another registered session.
 - If the pairing is missing or wrong, it uses the single pane whose title is this session's name. Failing that, it reports `pane-mismatch` and the session receives the message through the Stop hook instead.
-- **Busy panes still receive** (`push_while_working`, on by default). Claude folds the message into its current turn, and Codex steers it in. Panes showing an approval or question prompt are not typed into. A background `srhbroker deliver <name> --wait` waits for the prompt to clear.
+- **Busy panes** get what concerns their current work right away; other requests wait their turn ([below](#requests-that-arrive-while-a-pane-is-working)). Claude folds a message into its current turn, and Codex steers it in. Panes showing an approval or question prompt are not typed into. A background `srhbroker deliver <name> --wait` waits for the prompt to clear.
 - **Notices are not queued.** A `message` to a closed pane is dropped (`delivery: dropped`). Tasks and replies wait until the pane opens. Set `[herdr] drop_notices_when_closed = false` to queue notices too.
 - At most 30 messages per session every 10 minutes (`max_push_per_10min`) to stop ping-pong. Bodies over 6,000 characters are shortened, with a pointer to `status(task_id)`.
 - Outside herdr (`HERDR_ENV` unset), nothing is typed into panes. Messages arrive through the inbox and the Claude Stop hook.
 
+### Requests that arrive while a pane is working
+
+When a request reaches a pane whose agent is in the middle of a turn, the broker decides whether it belongs in that turn:
+
+| The request | What happens |
+|---|---|
+| Cancels, stops or reprioritizes work, or is marked urgent | Typed in right away, always |
+| Changes the work the receiver is doing now | Typed in right away (Jev judges; without a key, change words from the sender of that work count) |
+| Anything unrelated | Deferred. The sender's `send` result says `delivery: deferred` with its place in line, so the sending session can tell you. |
+| A reply to work the receiver sent | Typed in right away |
+
+**When a later message refers to one still waiting.** If the same sender already has requests waiting for that receiver (deferred, or waiting for a closed pane), the broker first checks whether the new message cancels, replaces or changes one of them. Requests from other sessions are never touched, since only the sender may cancel its own work.
+
+| Jev reads the new message as | What happens |
+|---|---|
+| Cancelling a waiting request, with confidence ≥ 0.8 and a clear target | The waiting request is cancelled before delivery. The new message is not typed in either, so the receiver sees neither. |
+| Cancelling it and asking for something else instead (same confidence) | The waiting request is cancelled and the new message goes on as a new request |
+| Changing a waiting request, or cancelling it without enough confidence | The two are tied together and typed in together, with a note that the second changes (or seems to cancel) the first |
+| Unrelated but urgent | Goes first among the deferred requests (`priority_threshold`, 0.7) |
+
+With several requests waiting, a cancellation counts as clear only if the message names the request, for example by words from its title: a vague "cancel that" never cancels anything on its own. Without Jev, the word rules only tie messages together and never cancel. The sender's `send` result reports what happened under `relation`, and the dashboard timeline records it.
+
+Deferred requests are typed in **one at a time** once the pane is free: by the engine, by a background `srhbroker deliver --wait`, or by Claude's Stop hook at the end of a turn. Notices go in with the next one, since they start no work. The receiving agent can also defer something itself: it calls `defer(task_id)`, the request goes back in line, and the sender is told "will do this after the current work (#2 in line)".
+
+Same-provider direct messages (Codex ↔ Codex) use the word rules only and are not sent to Jev. The dashboard shows deferred requests as *Deferred* with the reason and place in line. Turn this off with `[router.triage] mode = "off"`, or use `"rules"` to skip Jev.
+
 ### What leaves your machine
 
-Only the AI router talks to an outside service, and only when a key is set. It sends the task title, the start of the body (`max_body_chars`, default 1,500), the sender name and role descriptions. Set `send_body = false` to send titles only. Everything else stays in `~/.srhbroker` (SQLite).
+Only the AI router talks to an outside service, and only when a key is set. It sends the task title, the start of the body (`max_body_chars`, default 1,500), the sender name and role descriptions. When it judges a request that arrived while a pane was working, it also sends the titles and the first 300 characters of up to three tasks that pane is working on, and of up to five requests from the same sender still waiting for that pane. Set `send_body = false` to send titles only. Everything else stays in `~/.srhbroker` (SQLite).
 
 ## Configuration
 
@@ -304,7 +332,11 @@ Only the AI router talks to an outside service, and only when a key is set. It s
 | `[router] mode` | `shadow` | `rules` · `shadow` · `jev` |
 | `[[roles]]` | | `name`, `description`, `preferred_provider` |
 | `[router.hw_rules] extra_targets` | `[]` | Project-specific hardware names for the safety gate |
-| `[herdr] push_while_working` | `true` | Type into panes that are busy |
+| `[herdr] push_while_working` | `true` | Type into panes that are busy (`false`: everything waits until the pane is free) |
+| `[router.triage] mode` | `jev` | Requests to a working pane: `jev` (word rules + Jev), `rules` or `off` (type everything in right away) |
+| `[router.triage] threshold` | `0.5` | Jev probability above which a request goes in right away |
+| `[router.triage] relate` · `cancel_threshold` | `true` · `0.8` | Check later messages against waiting requests; Jev confidence needed to cancel one |
+| `[broker] reply_overdue_s` | `14400` | Tell the sender when delivered work has no reply after this long (`0` turns it off) |
 | `[herdr] drop_notices_when_closed` | `true` | Drop notices to closed panes |
 | `[broker] stale_after_s` | `86400` | Expire work stuck in held, needs_routing or queued |
 | `[monitor] dashboard_port` | `8765` | Web dashboard port |
@@ -371,6 +403,7 @@ To try the dashboards without any sessions, run `srhbroker demo`. It builds demo
 | `inbox(me?, mark?)` | Received work and notices, new replies to my work |
 | `cancel(task_id)` | Cancel work I sent. If it was delivered, the receiver is told to stop. |
 | `reply(task_id, result, status)` | Reply to work I received |
+| `defer(task_id, note?)` | Put a request I received back in line until my current work is done. The sender is told. |
 | `route(task_id, to)` | Route a `needs_routing` task |
 | `rename(new_name, old_name?)` | Rename this session's registration |
 | `register` · `sessions` · `whoami` | Registration |
@@ -381,7 +414,7 @@ A worker's final answer becomes its reply automatically. If it calls `reply` dur
 
 | | |
 |---|---|
-| Windows 11 | Daily use. 246 tests pass. The herdr plugin was checked on herdr 0.9.1: link, actions, popup output, engine tab, update restart. |
+| Windows 11 | Daily use. 273 tests pass. The herdr plugin was checked on herdr 0.9.1: link, actions, popup output, engine tab, update restart. |
 | macOS 26.6 (Apple Silicon) | Install → `setup --apply` → `doctor` → demo and web dashboard, plus the engine running a real `codex exec` worker. The herdr plugin has not been checked on macOS yet. |
 | Linux | Expected to work on the same POSIX paths, but not yet tested. Please open an issue if something breaks. |
 | Claude Code 2.x · codex-cli 0.159–0.160 | MCP environment, session IDs, `-p --session-id` / `--resume`, `exec resume`, Stop hook format |

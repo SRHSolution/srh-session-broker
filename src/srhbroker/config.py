@@ -65,6 +65,7 @@ DEFAULTS: dict[str, Any] = {
         "max_hops": 4,            # 작업 안에서 다시 send 할 수 있는 깊이
         "max_tasks_per_root": 20, # 하나의 최초 작업에서 파생될 수 있는 작업 수
         "stale_after_s": 86400,   # held·needs_routing·queued 로 이보다 오래 머문 작업은 timeout 처리 (데몬)
+        "reply_overdue_s": 14400, # 창에 넣은 작업이 이보다 오래 회신이 없으면 보낸 세션에 한 번 알리고 대시보드에 표시 (0 이면 끔)
         "default_deadline_s": 1800,
         "allow_mcp_approve": False,  # True 면 LLM 이 MCP 로 held 작업을 승인할 수 있다 (권장하지 않음)
     },
@@ -129,6 +130,33 @@ DEFAULTS: dict[str, Any] = {
         "rules": [],               # [{pattern="(?i)리뷰|review", to="reviewer"}]  to = 역할 또는 세션 이름
         # 하드웨어·안전 경계면 규칙 (대소문자 무시). '하드웨어 대상 + 제어 동작'이 함께 있을 때만 읽기 전용을 강제한다
         "hw_risk_patterns": [],    # (이전 방식) 여기 넣은 패턴은 단어 하나만으로 위험 1.0
+        # 작업 중 도착 판단: 받는 창이 작업 중(working)일 때 온 요청을 지금 넣을지(취소·수정·우선순위 변경 등 지금 작업과 관련),
+        # 지금 작업을 마친 뒤 순서대로 넣을지(무관한 새 요청) 정한다. 미룬 요청은 창이 쉬면 broker 가 하나씩 넣는다.
+        "triage": {
+            "mode": "jev",          # jev(규칙 + Jev 판단) | rules(규칙만) | off(이전 방식: 작업 중에도 모두 바로 넣음)
+            "threshold": 0.5,       # Jev '지금 바로 반영해야 한다' 확률이 이 이상이면 바로 넣는다
+            # 취소·중단·긴급: Jev 판단과 관계없이 바로 넣는다 (취소를 미루는 것이 더 위험하다)
+            "urgent_patterns": [
+                r"취소|중단|중지|멈춰|멈추|그만|보류|하지\s*마|긴급|급해|급함|급히|우선순위|먼저\s*(해|처리)",
+                r"(?i)\b(stop|cancel|abort|halt|hold\s+off|urgent|asap|priority)\b|don'?t\s+(do|proceed)",
+            ],
+            # 수정·변경: 받는 쪽이 지금 그 보낸 세션의 작업을 하고 있을 때만 바로 넣는다 (Jev 가 없을 때의 규칙)
+            "modify_patterns": [
+                r"수정|변경|바꿔|바꾸|대신|정정|다시\s*해|고쳐|추가로",
+                r"(?i)\b(instead|change|correction|actually|revise|also)\b",
+            ],
+            "release_gap_s": 15,    # 미룬 요청을 넣은 뒤 다음 것을 넣기까지 최소 간격 (창 상태가 working 으로 바뀔 시간)
+            "priority_threshold": 0.7,  # Jev '대기 중인 다른 요청보다 먼저' 확률이 이 이상이면 미룬 요청들 맨 앞
+            # 대기 중 요청과의 관계: 같은 보낸 세션이 아직 넣지 않은 요청이 있을 때 새 메시지가 그것을 취소·수정하는지 판단한다
+            "relate": True,
+            "cancel_threshold": 0.8,    # Jev '취소' 확률이 이 이상이고 대상이 분명할 때만 broker 가 대기 요청을 실제로 취소
+            "target_min": 0.6,          # 대기 요청이 여럿일 때 대상이 분명하다고 볼 Jev 확률 (2위와 0.2 이상 차이도 필요)
+            # 규칙(Jev 없을 때): 이 말이 있으면 대기 요청을 취소하려는 것으로 본다 — 규칙만으로는 취소하지 않고 함께 넣는다
+            "cancel_patterns": [
+                r"취소|철회|하지\s*마|안\s*해도|필요\s*없|빼\s*주|그만",
+                r"(?i)\b(cancel|never\s*mind|drop\s+(it|that)|scrap|don'?t\s+(do|bother))\b",
+            ],
+        },
         "hw_rules": {
             # 하드웨어 대상: 장비·제어 신호·제어 코드 경로
             "targets": [

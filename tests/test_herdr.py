@@ -160,7 +160,7 @@ def test_menu_detection(screen, menu):
 async def test_menu_on_screen_is_treated_as_busy(hb):
     hb.herdr.panes["sid-dev"] = "working"
     hb.herdr.at_menu = lambda pane: True
-    r = await hb.send("작업", sender="lead", to="dev")
+    r = await hb.send("지금 작업 중단하고 확인", sender="lead", to="dev")   # 바로 넣을 메시지여도 선택 화면이면 기다린다
     assert r["delivery"] == "waiting" and hb.herdr.prompts == []
 
 

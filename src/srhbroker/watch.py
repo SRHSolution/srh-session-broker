@@ -64,9 +64,10 @@ _PANE = {"open": ("●", "green"), "closed": ("○", "dim"), "mismatch": ("◆",
          "worker": ("◇", "cyan")}
 # 이름은 한국어 원문 — 그릴 때 tr() 로 바꾼다
 _KIND = {"approve": ("승인 대기", "yellow"), "route": ("대상 미정", "yellow"), "closed-pane": ("창 닫힘", "magenta"),
-         "failed": ("실패", "red"), "mismatch": ("창 짝 불일치", "red"), "engine": ("엔진", "red")}
+         "failed": ("실패", "red"), "mismatch": ("창 짝 불일치", "red"), "engine": ("엔진", "red"),
+         "overdue": ("회신 지연", "red")}
 _TRANSPORT = {"broker": ("중계", "blue"), "claude-native": ("Claude", "magenta"), "herdr-direct": ("Codex직접", "cyan")}
-_STATUS_COLOR = {"done": "green", "delivered": "cyan", "queued": "yellow", "held": "yellow", "needs_routing": "yellow",
+_STATUS_COLOR = {"done": "green", "delivered": "cyan", "queued": "yellow", "held": "yellow", "needs_routing": "yellow", "deferred": "yellow",
                  "running": "cyan", "failed": "red", "timeout": "red", "expired": "red", "cancelled": "dim", "dropped": "dim", "sent": "magenta",
                  "not_delivered": "red"}
 FILTERS = [None, "broker", "claude-native", "herdr-direct"]
@@ -104,7 +105,7 @@ def render(snap: dict[str, Any], flow_filter: str | None = None, cols: int = 120
         ref = a.get("task_id") or a.get("session") or ""
         line = f" [{i}] " + col(fit(label, 12), c) + " " + fit(ref, 26) + " " + fit(a["title"], max(20, cols - 46))
         out.append(line)
-        if a.get("detail") and a["kind"] in ("approve", "engine", "closed-pane", "mismatch"):
+        if a.get("detail") and a["kind"] in ("approve", "engine", "closed-pane", "mismatch", "overdue"):
             out.append("      " + col(fit(a["detail"], cols - 8), "dim"))
     out.append("")
 
@@ -130,9 +131,10 @@ def render(snap: dict[str, Any], flow_filter: str | None = None, cols: int = 120
     for f in flows[:room]:
         tlabel, tc = _TRANSPORT.get(f["transport"], (f["transport"], "dim"))
         tlabel = tr(tlabel)
-        sc = _STATUS_COLOR.get(f["status"], "dim")
+        status = "deferred" if f.get("deferred") else f["status"]   # 작업 중에 와서 미뤄 둔 요청
+        sc = _STATUS_COLOR.get(status, "dim")
         out.append(" " + fit(_iso_ago(f["at"]), 7) + col(fit(tlabel, 10), tc) + fit(f["from"], 22) + "→ "
-                   + fit(f["to"] or "?", 22) + col(fit(f["status"], 14), sc)
+                   + fit(f["to"] or "?", 22) + col(fit(status, 14), sc)
                    + fit(f.get("summary") or "", max(10, cols - 80)))
     out.append("")
     out.append(col(tr(" a 승인 · c 취소 · t 대상 지정 · d 상세 · f 필터 · r 새로고침 · q 종료   (작업은 ID 또는 [번호])"), "dim"))

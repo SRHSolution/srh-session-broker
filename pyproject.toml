@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "srh-session-broker"
-version = "0.7.0"
+version = "0.8.0"
 description = "Claude Code ↔ Codex session broker: hand off work and messages by session name (MCP server, herdr plugin, dashboards)"
 readme = "README.md"
 requires-python = ">=3.11"

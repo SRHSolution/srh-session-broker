@@ -102,6 +102,20 @@ CREATE TABLE IF NOT EXISTS push_log (
     at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_push_log ON push_log(session, at);
+-- 작업 중에 도착해 미룬 요청 (t_… broker 작업 · d_… 직접 전달). 받는 창이 쉬면 broker 가 deferred_at 순서대로 하나씩 넣는다.
+-- 항목이 더 이상 queued 가 아니면(넣음·취소·만료) 이 행은 무시된다
+CREATE TABLE IF NOT EXISTS deferred (
+    item_id TEXT PRIMARY KEY,
+    to_name TEXT NOT NULL,
+    from_name TEXT NOT NULL,
+    kind TEXT NOT NULL,           -- task | message
+    by TEXT NOT NULL,             -- jev | rules | agent(받는 세션이 defer 로 미룸)
+    note TEXT,
+    deferred_at TEXT NOT NULL,
+    link TEXT,                    -- 이 항목이 고치는(또는 취소하려는) 앞 대기 요청 — 그 요청과 함께 넣는다
+    priority INTEGER NOT NULL DEFAULT 0   -- 1 이면 미룬 요청들 맨 앞 (급한 요청)
+);
+CREATE INDEX IF NOT EXISTS ix_deferred_to ON deferred(to_name, deferred_at);
 CREATE TABLE IF NOT EXISTS route_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id TEXT NOT NULL,
@@ -141,6 +155,14 @@ class Store:
         self._conn.execute("PRAGMA busy_timeout=10000")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(_SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """이전 개발 버전이 만든 deferred 표에 없는 열을 더한다."""
+        cols = {r["name"] for r in self._conn.execute("PRAGMA table_info(deferred)")}
+        for col, ddl in (("link", "link TEXT"), ("priority", "priority INTEGER NOT NULL DEFAULT 0")):
+            if col not in cols:
+                self._conn.execute(f"ALTER TABLE deferred ADD COLUMN {ddl}")
 
     def close(self) -> None:
         self._conn.close()
@@ -420,13 +442,14 @@ class Store:
     def running_tasks(self) -> list[Task]:
         return [self._row_task(r) for r in self._q("SELECT * FROM tasks WHERE status='running'")]
 
-    def inbox(self, name: str, *, mark: bool) -> dict[str, list[Task]]:
+    def inbox(self, name: str, *, mark: bool, exclude: frozenset[str] | set[str] = frozenset()) -> dict[str, list[Task]]:
         """interactive 세션의 받은 편지함.
-        incoming: 나에게 온 queued 작업·메시지 (mark=True 면 delivered/done 으로 전이)
+        incoming: 나에게 온 queued 작업·메시지 (mark=True 면 delivered/done 으로 전이). exclude 는 빼고 (미룬 요청)
         replies : 내가 보낸 작업 중 끝났는데 아직 확인 안 한 것 (mark=True 면 확인 처리)
         """
-        incoming = [self._row_task(r) for r in self._q(
-            "SELECT * FROM tasks WHERE to_addr=? AND status='queued' ORDER BY created_at", (name,))]
+        incoming = [t for t in (self._row_task(r) for r in self._q(
+            "SELECT * FROM tasks WHERE to_addr=? AND status='queued' ORDER BY created_at", (name,)))
+            if t.id not in exclude]
         replies = [self._row_task(r) for r in self._q(
             "SELECT * FROM tasks WHERE from_addr=? AND reply_seen=0 AND kind<>'message' "
             "AND status IN ('done','failed','timeout','cancelled') ORDER BY finished_at", (name,))]
@@ -478,10 +501,11 @@ class Store:
         rows = self._q("SELECT * FROM direct_queue WHERE id=?", (did,))
         return self._row_direct(rows[0]) if rows else None
 
-    def claim_direct(self, to_name: str) -> list[dict[str, Any]]:
-        """받는 세션 앞 대기 항목을 선점(CAS)해 delivered 로 바꾸고 돌려준다."""
-        rows = [self._row_direct(r) for r in self._q(
-            "SELECT * FROM direct_queue WHERE to_name=? AND status='queued' ORDER BY created_at", (to_name,))]
+    def claim_direct(self, to_name: str, exclude: frozenset[str] | set[str] = frozenset()) -> list[dict[str, Any]]:
+        """받는 세션 앞 대기 항목을 선점(CAS)해 delivered 로 바꾸고 돌려준다 (exclude 는 빼고 — 미룬 요청)."""
+        rows = [d for d in (self._row_direct(r) for r in self._q(
+            "SELECT * FROM direct_queue WHERE to_name=? AND status='queued' ORDER BY created_at", (to_name,)))
+            if d["id"] not in exclude]
         got = []
         with self.tx() as c:
             for d in rows:
@@ -494,6 +518,64 @@ class Store:
         with self.tx() as c:
             c.executemany("UPDATE direct_queue SET status='queued', delivered_at=NULL WHERE id=? AND status='delivered'",
                           [(d["id"],) for d in items])
+
+    # ── 작업 중에 도착해 미룬 요청 ─────────────────────────────────────────
+
+    def defer_item(self, item_id: str, to_name: str, from_name: str, kind: str, by: str, note: str | None = None,
+                   *, link: str | None = None, priority: int = 0) -> None:
+        with self.tx() as c:
+            c.execute("INSERT OR REPLACE INTO deferred(item_id, to_name, from_name, kind, by, note, deferred_at, link,"
+                      " priority) VALUES (?,?,?,?,?,?,?,?,?)",
+                      (item_id, to_name, from_name, kind, by, note, now_iso(), link, priority))
+
+    def deferred(self, to_name: str) -> list[dict[str, Any]]:
+        """받는 세션 앞에 미뤄 둔 요청 중 아직 queued 인 것 (급한 것 먼저, 그다음 미룬 순서). 이미 끝난 항목의 행은 지운다."""
+        rows = [dict(r) for r in self._q(
+            "SELECT d.*, COALESCE(t.status, q.status) AS status FROM deferred d "
+            "LEFT JOIN tasks t ON t.id = d.item_id LEFT JOIN direct_queue q ON q.id = d.item_id "
+            "WHERE d.to_name=? ORDER BY d.priority DESC, d.rowid", (to_name,))]   # 같은 초에 여럿이어도 미룬 순서
+        # 끝난 항목(취소·만료·소멸)의 행만 지운다 — 넣는 중(선점) 상태는 넣기에 실패하면 queued 로 돌아온다
+        stale = [r["item_id"] for r in rows if r["status"] in (None, "cancelled", "timeout", "failed", "expired", "dropped")]
+        if stale:
+            self.undefer(stale)
+        return [r for r in rows if r["status"] == "queued"]
+
+    def deferred_ids(self) -> set[str]:
+        """모든 세션 앞에 미뤄 둔(아직 queued) 항목 ID (대시보드 표시용)."""
+        return {r["item_id"] for r in self._q(
+            "SELECT d.item_id FROM deferred d LEFT JOIN tasks t ON t.id = d.item_id "
+            "LEFT JOIN direct_queue q ON q.id = d.item_id WHERE COALESCE(t.status, q.status)='queued'")}
+
+    def undefer(self, item_ids: list[str] | set[str]) -> None:
+        with self.tx() as c:
+            c.executemany("DELETE FROM deferred WHERE item_id=?", [(i,) for i in item_ids])
+
+    def pending_from(self, to_name: str, from_name: str, exclude: str | None = None, limit: int = 5) -> list[Task]:
+        """그 보낸 세션이 이 받는 세션에 보냈는데 아직 넣지 않은(queued) broker 작업·메시지 (오래된 것부터)."""
+        return [self._row_task(r) for r in self._q(
+            "SELECT * FROM tasks WHERE to_addr=? AND from_addr=? AND status='queued' AND id<>? "
+            "ORDER BY created_at, rowid LIMIT ?", (to_name, from_name, exclude or "", limit))]
+
+    def in_progress(self, to_name: str, limit: int = 3) -> list[Task]:
+        """받는 세션이 지금 하고 있을 broker 작업 (창에 넣었고 아직 회신 전, 최근 것부터)."""
+        return [self._row_task(r) for r in self._q(
+            "SELECT * FROM tasks WHERE to_addr=? AND kind='task' AND status IN ('delivered','running') "
+            "ORDER BY started_at DESC LIMIT ?", (to_name, limit))]
+
+    def recent_direct_from(self, to_name: str, from_name: str, since_iso: str) -> bool:
+        """그 보낸 세션이 최근 이 세션 창에 직접 전달한 것이 있는지 (같은 provider — 회신 추적이 없어 시간으로 본다)."""
+        return bool(self._q("SELECT 1 FROM direct_queue WHERE to_name=? AND from_name=? AND status='delivered' "
+                            "AND delivered_at>=? LIMIT 1", (to_name, from_name, since_iso)))
+
+    def overdue_tasks(self, cutoff_iso: str) -> list[Task]:
+        """창에 넣은 지 cutoff 보다 오래됐는데 회신이 없는 작업 중 아직 알리지 않은 것."""
+        return [self._row_task(r) for r in self._q(
+            "SELECT * FROM tasks t WHERE t.kind='task' AND t.status='delivered' AND t.started_at < ? "
+            "AND NOT EXISTS (SELECT 1 FROM route_log l WHERE l.task_id=t.id AND l.router='overdue')", (cutoff_iso,))]
+
+    def last_push(self, name: str) -> str | None:
+        r = self._q("SELECT MAX(at) AS at FROM push_log WHERE session=?", (name,))
+        return r[0]["at"] if r else None
 
     def set_direct_status(self, did: str, frm: str, to: str) -> bool:
         with self.tx() as c:

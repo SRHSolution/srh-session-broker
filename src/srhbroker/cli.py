@@ -520,7 +520,7 @@ def _deliver(b: Any, name: str, wait: bool) -> int:
         end = time.monotonic() + float(b.cfg.data.get("herdr", {}).get("wait_timeout_s", 3600))
         while True:
             r = b.deliver_now(name)
-            if not wait or r not in ("busy", "delivered"):
+            if not wait or r not in ("busy", "delivered", "deferred"):
                 print(r)
                 return 0
             s = b.store.get_session(name)
@@ -530,7 +530,7 @@ def _deliver(b: Any, name: str, wait: bool) -> int:
             if not agent or remaining <= 0:
                 print("no-pane" if not agent else "timeout")
                 return 0
-            if r == "busy":
+            if r in ("busy", "deferred"):   # 작업 중에 미뤄 둔 요청은 창이 쉬면 하나씩 넣는다
                 b.herdr.wait_ready(agent["pane_id"], min(remaining, 300))
             time.sleep(1)  # 넣은 직후에는 창이 working 으로 바뀔 때까지 잠깐 둔다
     finally:

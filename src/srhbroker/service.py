@@ -23,7 +23,10 @@ from .store import Store
 _ACTIVE = (TaskStatus.QUEUED, TaskStatus.RUNNING, TaskStatus.DELIVERED, TaskStatus.HELD, TaskStatus.NEEDS_ROUTING)
 
 _HEAD_WORKING = ("[SRH Broker] 작업 중에 새 메시지가 도착했습니다. 지금 작업과 관련 있으면(취소·수정·우선순위 변경 등) "
-                 "바로 반영하고, 관련 없으면 지금 작업을 마친 뒤 처리하세요.")
+                 "바로 반영하세요. 지금 작업과 무관한 새 작업이면 srhbroker MCP 의 defer(task_id=...) 로 미루고 지금 작업을 "
+                 "계속하세요 — 지금 작업이 끝나 창이 쉬면 broker 가 순서대로 다시 넣고, 보낸 세션에도 알립니다. "
+                 "회신(결과 보고)은 미룰 필요가 없습니다.")
+_HEAD_RELEASED = ("[SRH Broker] 앞의 작업 중에 도착해 미뤄 두었던 요청입니다. 이제 아래 내용을 처리하세요.")
 
 # send·route 결과의 delivery 값을 보낸 세션이 사용자에게 설명할 수 있게
 DELIVERY_NOTES = {
@@ -41,6 +44,8 @@ DELIVERY_NOTES = {
     "dropped": "받는 창이 닫혀 있어 알림을 넣지 않고 버렸습니다(알림은 창이 열릴 때까지 기다리지 않습니다). "
                "꼭 전해야 하는 내용이면 사용자에게 알리세요.",
     "nothing": "넣을 메시지가 없습니다.",
+    "deferred": "받는 세션이 다른 작업을 하는 중이고 이 요청은 그 작업과 무관하다고 판단해, 지금 작업을 마친 뒤 순서대로 넣습니다 "
+                "(대기 {n}번째). 사용자에게 그렇게 알리세요. 지금 작업을 바꾸는 급한 수정·취소라면 그 뜻을 분명히 적어 다시 보내세요.",
     "failed": "herdr 로 넣는 중 오류가 났습니다. 받는 쪽은 inbox 로 받을 수 있습니다.",
 }
 
@@ -340,7 +345,19 @@ class Broker:
 
         out = {**t.summary(), "reason": d.reason}
         if t.status == TaskStatus.QUEUED and t.to_addr:
+            rel = await self._relate(t)
+            if rel and rel["applied"] == "cancelled":       # 대기 요청을 넣기 전에 취소 — 이 메시지는 넣지 않는다
+                out.update(self.store.require_task(t.id).summary())
+                out.update(delivery="not-needed", relation=rel["public"], next=rel["next"],
+                           delivery_note=rel["next"])
+                return out
+            if not rel or rel["applied"] != "bundled":   # 묶인 메시지는 대상 요청과 함께 넣는다 (작업 중 도착 판단 생략)
+                await self._triage(t, strong_words=not rel)   # 대체: '취소' 말은 이미 처리한 대기 요청을 가리킨다
             out.update(self._queued_result(t.id, t.to_addr))
+            if rel:
+                out["relation"] = rel["public"]
+                if rel.get("next"):
+                    out["next"] = rel["next"]
         if t.status == TaskStatus.NEEDS_ROUTING:
             out["next"] = (f"대상이 정해지지 않았습니다. 제안: {d.suggestion!r}. "
                            f"route(task_id='{t.id}', to='<세션 이름|역할>') 로 지정하세요.")
@@ -429,10 +446,198 @@ class Broker:
         out = self.store.require_task(task_id).summary()
         if out["status"] == TaskStatus.CANCELLED.value and delivery in ("dropped", "no-pane"):
             delivery = "dropped"
+        pos = self._defer_position(to, task_id)
+        if pos:
+            delivery = "deferred"
+            out["deferred"] = {"position": pos}
         out["delivery"] = delivery
         if delivery in DELIVERY_NOTES:
-            out["delivery_note"] = DELIVERY_NOTES[delivery]
+            out["delivery_note"] = DELIVERY_NOTES[delivery].format(n=pos)
         return out
+
+    # ── 작업 중 도착: 지금 넣을지, 지금 작업을 마친 뒤 넣을지 ─────────────────
+
+    def _working_receiver(self, name: str | None) -> Session | None:
+        """받는 세션이 herdr 창에서 작업 중(working)이면 그 세션. 작업 중 도착 판단을 할 필요가 없으면 None."""
+        if not name or self.router.tcfg.get("mode", "jev") == "off":
+            return None
+        if not self.cfg.data.get("herdr", {}).get("push_while_working", True):
+            return None   # 작업 중에는 어차피 넣지 않고 쉴 때 넣는다
+        s = self.store.get_session(name)
+        if not s or s.mode != SessionMode.INTERACTIVE or not s.native_id or not self.herdr.available():
+            return None
+        agent, how = self.locate_pane(s)
+        if how in ("none", "mismatch") or (agent or {}).get("agent_status") != "working":
+            return None
+        return s
+
+    async def _triage(self, t: Task, *, strong_words: bool = True) -> dict[str, Any] | None:
+        """받는 창이 작업 중일 때 온 broker 작업·메시지를 판단한다 (규칙 + Jev). 무관하면 미뤄 둔다."""
+        rcv = self._working_receiver(t.to_addr)
+        if rcv is None:
+            return None
+        current = self.store.in_progress(rcv.name)
+        v = await self.router.triage(t, current, sender_active=any(c.from_addr == t.from_addr for c in current),
+                                     strong_words=strong_words)
+        v["working_on"] = [c.title for c in current]
+        if not v["urgent"]:
+            self.store.defer_item(t.id, rcv.name, t.from_addr, t.kind.value, v["by"],
+                                  priority=1 if v.get("priority_high") else 0)
+        self.store.log_route(t.id, "triage" if v["urgent"] else "defer", rcv.name, v.get("jev"), True, v)
+        return v
+
+    async def _relate(self, t: Task) -> dict[str, Any] | None:
+        """같은 보낸 세션이 이 받는 세션에 보냈는데 아직 넣지 않은 요청이 있으면, 새 메시지가 그것을 취소·대체·수정하는지
+        판단한다 (규칙 + Jev). 다른 세션의 요청은 보지 않는다 — 취소는 보낸 세션만 할 수 있다.
+        - Jev 가 취소(또는 취소 후 대체)로 cancel_threshold 이상 확신하고 대상이 분명하면: 대상 요청을 넣기 전에 취소한다.
+          취소만이면 이 메시지는 넣지 않고(applied=cancelled), 대체면 새 요청으로 계속 진행한다(applied=replaced).
+        - 수정이거나, 취소로 보이지만 확신이 부족하면: 대상 요청과 묶어 함께 넣는다(applied=bundled).
+        반환 None 이면 관계 없음(새 요청)."""
+        tc = self.router.tcfg
+        if tc.get("mode", "jev") == "off" or not tc.get("relate", True) or t.kind == TaskKind.REPLY:
+            return None
+        rcv = self.store.get_session(t.to_addr) if t.to_addr else None
+        pending = self.store.pending_from(t.to_addr, t.from_addr, exclude=t.id) if rcv else []
+        if not pending:
+            return None
+        v = await self.router.relate(t, pending)
+        target = next((p for p in pending if p.id == v["target"]), None)
+        if v["relation"] == "new" or target is None:
+            if v["by"] == "jev":   # Jev 에 물어본 것은 기록한다 (그림자 평가용)
+                self.store.log_route(t.id, "relate", None, v.get("p"), False, {**v, "applied": "new"})
+            return None
+        rel = v["relation"]
+        sure = (v["by"] == "jev" and v["target_sure"] and (v.get("p") or 0) >= float(tc.get("cancel_threshold", 0.8)))
+        public = {"relation": rel, "target": target.id, "target_title": target.title, "by": v["by"], "p": v.get("p")}
+        if rel in ("cancel", "replace") and sure:
+            if self.store.transition(target.id, (TaskStatus.QUEUED,), TaskStatus.CANCELLED, error="취소됨"):
+                self.store.log_route(target.id, "cancel", target.to_addr, v.get("p"), True,
+                                     {"by": t.from_addr, "was": "queued", "via": t.id})
+                if rel == "cancel":
+                    self.store.transition(t.id, (TaskStatus.QUEUED,), TaskStatus.DONE, started_at=now_iso(),
+                                          result=f"대기 중이던 {target.id} 을 받는 쪽에 넣기 전에 취소함")
+                    self.store.mark_reply_seen(t.id)
+                self.store.log_route(t.id, "relate", target.id, v.get("p"), True,
+                                     {**v, "applied": "cancelled" if rel == "cancel" else "replaced"})
+                public["applied"] = "cancelled" if rel == "cancel" else "replaced"
+                nxt = (f"대기 중이던 {target.id} ('{target.title}') 을 받는 쪽에 넣기 전에 취소했습니다"
+                       + (". 이 메시지는 넣지 않았습니다(받는 쪽은 원래 요청을 보지 못했습니다)." if rel == "cancel"
+                          else ". 이 메시지는 새 요청으로 보냈습니다.")
+                       + " 잘못 취소됐다면 원래 요청을 다시 보내세요. 사용자에게 알리세요.")
+                return {"applied": public["applied"], "public": public, "next": nxt}
+            # 그 사이 넣어졌으면(취소 실패) 지금 작업을 바꾸는 메시지로 — 작업 중 도착 판단에 맡긴다
+            return None
+        # 수정, 또는 취소로 보이지만 확실하지 않음 → 대상과 묶어 함께 넣는다
+        rm = dict(t.route_meta or {})
+        rm["relates_to"] = {"task_id": target.id, "title": target.title, "relation": rel, "sure": bool(sure)}
+        self.store.transition(t.id, (TaskStatus.QUEUED,), TaskStatus.QUEUED, route_meta=rm)
+        t.route_meta = rm
+        deferred = {d["item_id"]: d for d in self.store.deferred(rcv.name)}
+        if target.id in deferred:   # 대상이 미뤄져 있으면 이 메시지도 그 뒤에 묶어 둔다
+            self.store.defer_item(t.id, rcv.name, t.from_addr, t.kind.value, v["by"], link=target.id,
+                                  priority=deferred[target.id]["priority"])
+        self.store.log_route(t.id, "relate", target.id, v.get("p"), True, {**v, "applied": "bundled"})
+        public["applied"] = "bundled"
+        nxt = (f"아직 넣지 않은 {target.id} ('{target.title}') 과 묶어 두었습니다. 받는 쪽에 함께 넣으며 "
+               + ("이 메시지가 그 요청을 고치는 내용이라고 알립니다."
+                  if rel == "modify" else "이 메시지가 그 요청을 취소하려는 것으로 보인다고 알립니다(확실하지 않아 취소하지 않음)."))
+        return {"applied": "bundled", "public": public, "next": nxt}
+
+    def _triage_direct(self, did: str, source: Session, target: Session, request: dict[str, Any]) -> bool:
+        """같은 provider 직접 전달은 broker 작업이 아니라 Jev 로 보내지 않고 규칙으로만 판단한다. 미뤘으면 True."""
+        if self._working_receiver(target.name) is None:
+            return False
+        since = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat(timespec="seconds")
+        v = self.router.triage_rules(f"{request.get('title') or ''}\n{request.get('body') or ''}",
+                                     sender_active=self.store.recent_direct_from(target.name, source.name, since))
+        if v["urgent"]:
+            return False
+        self.store.defer_item(did, target.name, source.name, request.get("kind") or "task", "rules")
+        return True
+
+    def _defer_position(self, to: str | None, item_id: str) -> int:
+        """미뤄 둔 요청이면 그 세션 앞 대기 순번(1부터), 아니면 0."""
+        ids = [d["item_id"] for d in self.store.deferred(to)] if to else []
+        return ids.index(item_id) + 1 if item_id in ids else 0
+
+    def _hold_back(self, name: str, working: bool) -> set[str]:
+        """이번에 넣지 않을 미룬 요청. 작업 중이면 모두, 쉬고 있으면 알림(message)은 모두 넣고 작업은 맨 앞 하나만 넣는다.
+        방금 넣었으면(창이 아직 working 으로 바뀌지 않았을 수 있음) 모두 기다린다."""
+        items = self.store.deferred(name)
+        ids = {d["item_id"] for d in items}
+        if not items or working:
+            return ids
+        last = self.store.last_push(name)
+        gap = float(self.router.tcfg.get("release_gap_s", 15))
+        if last and (datetime.now(timezone.utc) - datetime.fromisoformat(last)).total_seconds() < gap:
+            return ids
+        standalone = [d for d in items if not d.get("link") or d["link"] not in ids]
+        tasks = [d["item_id"] for d in standalone if d["kind"] == "task"]
+        release = {d["item_id"] for d in standalone if d["kind"] != "task"} | set(tasks[:1])
+        release |= {d["item_id"] for d in items if d.get("link") in release}   # 고치는 메시지는 대상과 함께
+        return ids - release
+
+    def defer(self, task_id: str, *, sender: str | None, note: str = "") -> dict[str, Any]:
+        """받은 작업이 지금 하는 작업과 무관해 나중에 처리한다 (받는 세션이 부른다).
+        작업을 다시 대기(queued)로 돌리고, 창이 쉬면 broker 가 순서대로 넣는다. 보낸 세션에 알린다."""
+        me = self._check_sender(sender)
+        note = (note or "").strip()
+        if task_id.startswith("d_"):
+            d = self.store.get_direct(task_id)
+            if not d or d["to_name"] != me:
+                raise BrokerError(f"직접 전달 {task_id} 은 {me} 에게 온 것이 아닙니다")
+            if d["status"] == "delivered" and not self.store.set_direct_status(task_id, "delivered", "queued"):
+                raise BrokerError(f"직접 전달 {task_id} 을 미룰 수 없습니다 (현재 {d['status']})")
+            if d["status"] not in ("delivered", "queued"):
+                raise BrokerError(f"직접 전달 {task_id} 을 미룰 수 없습니다 (현재 {d['status']})")
+            kind, frm, title = d["request"].get("kind") or "task", d["from_name"], d["request"].get("title") or ""
+        else:
+            t = self.store.require_task(task_id)
+            if t.to_addr != me:
+                raise BrokerError(f"작업 {task_id} 의 담당은 {t.to_addr} 입니다 ({me} 는 미룰 수 없음)")
+            if not self.store.transition(task_id, (TaskStatus.DELIVERED, TaskStatus.QUEUED), TaskStatus.QUEUED):
+                raise BrokerError(f"작업 {task_id} 은 미룰 수 있는 상태가 아닙니다 (현재 {t.status})")
+            kind, frm, title = t.kind.value, t.from_addr, t.title
+            self.store.log_route(task_id, "defer", me, None, True, {"by": "agent", "note": note or None})
+        self.store.defer_item(task_id, me, frm, kind, "agent", note or None)
+        pos = self._defer_position(me, task_id)
+        body = (f"{me} 이(가) 지금 하는 작업을 마친 뒤 '{title}' ({task_id}) 을 순서대로 처리합니다 (대기 {pos}번째)."
+                + (f" 메모: {note}" if note else "") + " 다시 보내지 마세요. 급하면 취소(cancel) 후 급한 이유를 적어 다시 보내세요.")
+        notified = None
+        if frm != USER_ADDR and (src := self.store.get_session(frm)):
+            if task_id.startswith("d_"):
+                did = "d_" + new_task_id()[2:]
+                self.store.enqueue_direct(did, src.provider, me, frm, {"body": body, "title": f"미룸: {title}"[:80],
+                                                                       "kind": "message"})
+            else:
+                self.store.insert_task(Task(id=new_task_id(), kind=TaskKind.MESSAGE, from_addr=me, to_addr=frm,
+                                            title=f"미룸: {title}"[:80], routed_by="defer", parent_id=task_id,
+                                            body=body, deadline_s=int(self.cfg.broker["default_deadline_s"])))
+            notified = self.notify(frm)
+        return {"task_id": task_id, "status": "queued", "deferred": {"position": pos, "by": "agent"},
+                "sender_notified": notified,
+                "next": "지금 작업을 계속하세요. 지금 회신하지 마세요 — 작업이 끝나 창이 쉬면 broker 가 이 요청을 다시 넣습니다."}
+
+    def flag_overdue(self) -> list[str]:
+        """창에 넣은 뒤 오래 회신이 없는 작업을 보낸 세션에 한 번 알린다 (데몬이 주기적으로 부른다)."""
+        age = int(self.cfg.broker.get("reply_overdue_s", 14400))
+        if age <= 0:
+            return []
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=age)).isoformat(timespec="seconds")
+        flagged = []
+        for t in self.store.overdue_tasks(cutoff):
+            self.store.log_route(t.id, "overdue", t.to_addr, None, True, {"after_s": age})
+            flagged.append(t.id)
+            if t.from_addr != USER_ADDR and self.store.get_session(t.from_addr):
+                hours = round(age / 3600, 1)
+                self.store.insert_task(Task(
+                    id=new_task_id(), kind=TaskKind.MESSAGE, from_addr=t.to_addr or "?", to_addr=t.from_addr,
+                    title=f"회신 지연: {t.title}"[:80], routed_by="overdue", parent_id=t.id,
+                    deadline_s=int(self.cfg.broker["default_deadline_s"]),
+                    body=(f"작업 {t.id} ('{t.title}') 을 {t.to_addr} 창에 넣은 지 {hours}시간이 넘었는데 회신이 없습니다. "
+                          f"status(task_id='{t.id}') 로 확인하고, 필요 없으면 cancel, 아직 필요하면 사용자에게 알리세요.")))
+                self.notify(t.from_addr)
+        return flagged
 
     def cancel(self, task_id: str, *, by: str | None = None) -> dict[str, Any]:
         """작업 취소. by 를 주면 보낸 세션과 사람(CLI, 'user')만 취소할 수 있다 (받는 쪽은 reply(status='failed')).
@@ -522,14 +727,27 @@ class Broker:
                 return {**self.status(task_id), "waiting": True, "note": f"{timeout_s:.0f}초 안에 끝나지 않았습니다"}
             await asyncio.sleep(poll_s)
 
-    def inbox(self, name: str, *, mark: bool = True) -> dict[str, Any]:
+    def inbox(self, name: str, *, mark: bool = True, at_idle: bool = False) -> dict[str, Any]:
+        """받은 편지함. mark=True 면 꺼낸 것을 전달 처리한다 — 작업 중에 미뤄 둔 요청은 빼고, at_idle(응답을 마친 순간 =
+        Stop hook)이면 미룬 요청을 순서대로 하나 넣는다. mark=False 는 미룬 요청도 deferred 표시와 함께 보여 준다."""
         n = self._check_sender(name)
-        return self._box_dict(self.store.inbox(n, mark=mark))
+        deferred = {d["item_id"] for d in self.store.deferred(n)}
+        if not mark:
+            return self._box_dict(self.store.inbox(n, mark=False), deferred)
+        hold = self._hold_back(n, working=False) if at_idle else deferred
+        box = self.store.inbox(n, mark=True, exclude=hold)
+        released = {t.id for t in box["incoming"]} & deferred
+        if released:
+            self.store.undefer(released)
+        return self._box_dict(box, released)
 
     @staticmethod
-    def _box_dict(box: dict[str, list[Task]]) -> dict[str, Any]:
+    def _box_dict(box: dict[str, list[Task]], deferred: set[str] = frozenset()) -> dict[str, Any]:
         return {
-            "incoming": [{**t.summary(), "body": t.body, "acceptance": t.acceptance, "reply_schema": t.reply_schema}
+            "incoming": [{**t.summary(), "body": t.body, "acceptance": t.acceptance, "reply_schema": t.reply_schema,
+                          **({"deferred": True} if t.id in deferred else {}),
+                          **({"relates_to": (t.route_meta or {})["relates_to"]}
+                             if (t.route_meta or {}).get("relates_to") else {})}
                          for t in box["incoming"]],
             "replies": [{**t.summary(), "result": t.result, "error": t.error} for t in box["replies"]],
         }
@@ -547,6 +765,13 @@ class Broker:
             return text[:cut] + f"\n…(이하 생략 — 전체 내용은 srhbroker MCP 의 status(task_id='{task_id}') 로 확인)"
 
         for t in box["incoming"]:
+            rel = t.get("relates_to")
+            if rel:
+                lines.append(f"↳ 아래 메시지는 같은 세션이 앞서 보낸 {rel['task_id']} ('{rel['title']}') "
+                             + ("을(를) 고치는 내용입니다 — 그 요청과 함께 반영하세요."
+                                if rel["relation"] == "modify" else
+                                "을(를) 취소하려는 것으로 보입니다(확실하지 않아 broker 가 취소하지 않음) — 보낸 세션의 뜻대로 "
+                                "반영하고, 취소라면 그 요청은 하지 말고 reply(status='failed') 로 알리세요."))
             lines.append(f"■ [{t['kind']}] {t['task_id']} — 보낸 세션: {t['from']}\n제목: {t['title']}\n"
                          f"{body(t['body'], t['task_id'])}")
             if t.get("acceptance"):
@@ -603,7 +828,9 @@ class Broker:
         """interactive 세션이 herdr 창에서 받을 수 있으면 받은 편지함(broker 작업·회신)과
         같은 provider 직접 전달 대기열을 한 번에 프롬프트로 넣는다.
         받는 창이 herdr 에 없으면(no-pane) 대기 중인 알림(message)은 소멸시킨다 — 작업·회신만 창이 열릴 때까지 기다린다.
-        반환: delivered | busy | no-pane | dropped | pane-mismatch | nothing | not-herdr | not-interactive | rate-limited | failed"""
+        작업 중에 와서 미뤄 둔 요청은 창이 쉴 때 하나씩 넣는다 (_hold_back).
+        반환: delivered | busy | deferred(미룬 요청만 남음) | no-pane | dropped | pane-mismatch | nothing | not-herdr |
+              not-interactive | rate-limited | failed"""
         s = self.store.get_session(name)
         if not s or s.mode != SessionMode.INTERACTIVE or not s.native_id:
             return "not-interactive"
@@ -614,13 +841,21 @@ class Broker:
             return "dropped"
         if why != "ok":
             return why
+        deferred_ids = {d["item_id"] for d in self.store.deferred(name)}   # 선점하면 queued 가 아니게 되므로 먼저
+        hold = self._hold_back(name, working)   # 작업 중에 와서 미뤄 둔 요청은 쉴 때 하나씩
         # 먼저 선점(CAS) — 동시에 넣는 다른 프로세스(데몬·대기 프로세스·Stop hook)와 겹치지 않게
-        box = self.store.inbox(name, mark=True)
-        directs = self.store.claim_direct(name)
+        box = self.store.inbox(name, mark=True, exclude=hold)
+        directs = self.store.claim_direct(name, exclude=hold)
         if not box["incoming"] and not box["replies"] and not directs:
-            return "nothing"
+            return "deferred" if hold else "nothing"
         limit = int(self.cfg.data.get("herdr", {}).get("max_push_chars", 6000))
-        parts = [_HEAD_WORKING if working else "[SRH Broker] 새 메시지가 도착했습니다. 아래 내용을 처리하세요."]
+        released = {t.id for t in box["incoming"]} | {d["id"] for d in directs}
+        released &= deferred_ids
+        head = (_HEAD_RELEASED if released else
+                _HEAD_WORKING if working else "[SRH Broker] 새 메시지가 도착했습니다. 아래 내용을 처리하세요.")
+        if released and hold:
+            head += f" 미뤄 둔 요청이 {len(hold)}건 더 있습니다 — 이 작업을 마치면 이어서 넣습니다."
+        parts = [head]
         if box["incoming"] or box["replies"]:
             parts.append(self.render_inbox(self._box_dict(box), limit))
         parts += [self._render_direct(d, limit) for d in directs]
@@ -629,6 +864,8 @@ class Broker:
             self.store.unclaim_direct(directs)
             return "failed"
         self.store.log_push(name)
+        if released:
+            self.store.undefer(released)
         return "delivered"
 
     def _drop_notices(self, name: str) -> bool:
@@ -663,11 +900,13 @@ class Broker:
         받는 창이 닫혀 있거나 승인 창이면 기다렸다가(데몬·대기 프로세스) 넣는다. 단 알림(message)은 창이 닫혀 있으면 소멸."""
         did = "d_" + new_task_id()[2:]
         self.store.enqueue_direct(did, source.provider, source.name, target.name, request)
+        self._triage_direct(did, source, target, request)
         delivery = self.notify(target.name) or "failed"
         status = (self.store.get_direct(did) or {}).get("status")
         done = status == "delivered"
         if status == "dropped":
             delivery = "dropped"
+        pos = 0 if done else self._defer_position(target.name, did)
         out: dict[str, Any] = {"transport": "herdr-direct", "task_id": None, "direct_id": did, "from": source.name,
                                "to": target.name, "provider": source.provider, "delivered": done,
                                "status": status if status in ("delivered", "dropped") else "queued", "delivery": delivery}
@@ -677,6 +916,11 @@ class Broker:
         elif status == "dropped":
             out["delivery_note"] = DELIVERY_NOTES["dropped"]
             out["next"] = "알림을 버렸습니다. 다시 보내지 말고, 필요하면 사용자에게 알리세요."
+        elif pos:
+            out["delivery"], out["deferred"] = "deferred", {"position": pos}
+            out["delivery_note"] = DELIVERY_NOTES["deferred"].format(n=pos)
+            out["next"] = (f"받는 세션의 지금 작업이 끝나면 넣습니다({did}). broker 작업이 아니므로 wait/status 로 추적하지 마세요. "
+                           f"필요 없어지면 cancel(task_id='{did}') 로 취소하세요.")
         else:
             out["delivery_note"] = DELIVERY_NOTES.get(delivery, "")
             out["next"] = (f"아직 넣지 못해 직접 전달 대기열에 두었습니다({did}). 받는 창이 열리거나 풀리면 자동으로 넣습니다. "
@@ -694,6 +938,8 @@ class Broker:
         if r == "busy":
             herdr_mod.spawn_waiter(name)
             return "waiting"
+        if r == "deferred":   # 미룬 요청: 창이 쉬면 넣어 줄 대기 프로세스 (데몬·Stop hook 도 넣는다 — 먼저 넣은 쪽만)
+            herdr_mod.spawn_waiter(name)
         return r
 
     def recent(self, limit: int = 20, status: str | None = None, *, mine: str | None = None,

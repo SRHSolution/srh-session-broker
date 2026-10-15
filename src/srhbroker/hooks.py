@@ -74,13 +74,15 @@ def claude_stop(broker: Broker, name: str | None, stdin: TextIO | None = None, s
         name = s.name
         if sid and (ns := native.find(sid, provider, payload.get("transcript_path"))):
             broker.sync_title(s, ns.title)
-        box = broker.inbox(name, mark=True)
+        box = broker.inbox(name, mark=True, at_idle=True)   # 응답을 마친 순간 — 미뤄 둔 요청을 하나 넣는다
     except Exception as e:  # hook 오류로 사용자의 세션을 막지 않는다
         print(f"srhbroker hook 오류: {e}", file=sys.stderr)
         return 0
     if not box["incoming"] and not box["replies"]:
         return 0
-    reason = "[SRH Broker] 새 메시지가 도착했습니다. 아래 내용을 처리하세요.\n\n" + broker.render_inbox(box)
+    head = ("[SRH Broker] 앞의 작업 중에 도착해 미뤄 두었던 요청입니다. 이제 아래 내용을 처리하세요."
+            if any(x.get("deferred") for x in box["incoming"]) else "[SRH Broker] 새 메시지가 도착했습니다. 아래 내용을 처리하세요.")
+    reason = head + "\n\n" + broker.render_inbox(box)
     stdout.write(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
     stdout.flush()
     return 0

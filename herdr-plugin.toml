@@ -5,7 +5,7 @@
 
 id = "srhbroker"
 name = "SRH Session Broker"
-version = "0.7.0"
+version = "0.8.0"
 min_herdr_version = "0.9.0"
 description = "Claude Code and Codex sessions hand work to each other by name: messages land in the receiving pane, replies come back, risky work waits for your approval. Terminal and web dashboards."
 platforms = ["windows", "macos", "linux"]

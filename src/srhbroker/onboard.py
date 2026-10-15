@@ -21,7 +21,7 @@ from typing import Any
 from . import native
 
 MCP_TOOLS = ["sessions", "whoami", "register", "rename", "send", "route", "approve", "inbox", "reply", "status", "wait",
-             "cancel", "recent"]
+             "cancel", "recent", "defer"]
 CODEX_ENV_VARS = ["SRHBROKER_SELF", "SRHBROKER_TASK", "SRHBROKER_HOME", "TYPESAFE_API_KEY",
                   "HERDR_ENV", "HERDR_SOCKET_PATH", "HERDR_BIN_PATH", "HERDR_HOME", "HERDR_PANE_ID", "HERDR_TAB_ID",
                   "HERDR_WORKSPACE_ID"]

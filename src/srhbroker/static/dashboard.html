@@ -47,9 +47,9 @@ h2 { font-size: 14px; margin: 0; font-weight: 800; }
 .attention h2 { margin-bottom: 8px; }
 .attention ul { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 8px; }
 .attention li { background: var(--panel); border-left: 4px solid var(--wait); border-radius: var(--radius-sm); padding: 9px 12px; min-width: 0; }
-.attention li.failed, .attention li.engine, .attention li.mismatch { border-left-color: var(--bad); }
+.attention li.failed, .attention li.engine, .attention li.mismatch, .attention li.overdue { border-left-color: var(--bad); }
 .attention .kind { font-size: 12px; font-weight: 700; color: var(--wait); }
-.attention li.failed .kind, .attention li.engine .kind, .attention li.mismatch .kind { color: var(--bad); }
+.attention li.failed .kind, .attention li.engine .kind, .attention li.mismatch .kind, .attention li.overdue .kind { color: var(--bad); }
 .attention .t { font-weight: 600; overflow-wrap: anywhere; }
 .attention .d { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
 .acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; align-items: center; }
@@ -111,7 +111,7 @@ h2 { font-size: 14px; margin: 0; font-weight: 800; }
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .s-done, .s-sent { color: var(--ok); } .s-failed, .s-timeout, .s-expired, .s-not_delivered { color: var(--bad); }
 .upd { color: var(--wait); }
-.s-queued, .s-held, .s-needs_routing { color: var(--wait); } .s-cancelled, .s-dropped { color: var(--muted); }
+.s-queued, .s-held, .s-needs_routing, .s-deferred { color: var(--wait); } .s-cancelled, .s-dropped { color: var(--muted); }
 .s-delivered, .s-running { color: var(--codex); }
 .more { display: block; width: 100%; padding: 10px; border: 0; border-top: 1px solid var(--line); background: transparent; color: var(--muted); cursor: pointer; }
 .more:hover { background: var(--hover); }
@@ -271,7 +271,8 @@ const EN = {
   "+{n}초": "+{n}s", "+{n}분": "+{n}m", "+{n}시간": "+{n}h",
   "대기": "Queued", "승인 대기": "Awaiting approval", "대상 미정": "No target", "전달됨": "Delivered", "실행 중": "Running",
   "실패": "Failed", "만료": "Expired", "취소|상태": "Cancelled", "소멸": "Dropped", "보냄": "Sent", "전달 못 함": "Not delivered",
-  "창 닫힘": "Pane closed", "창 짝 불일치": "Pane mismatch", "엔진": "Engine",
+  "창 닫힘": "Pane closed", "창 짝 불일치": "Pane mismatch", "엔진": "Engine", "회신 지연": "Reply overdue",
+  "미룸": "Deferred", "미룸 {n}": "deferred {n}",
   "중계": "Relay", "Claude 직접": "Claude direct", "Codex 직접": "Codex direct",
   "데몬이 꺼져 있습니다.": "The engine is stopped.", "herdr 창에서 {cmd} 을 띄우세요.": "Start it with {cmd} in a herdr pane.",
   "데몬이 {old}입니다. 재시작하세요.": "The engine is {old}. Restart it.", "이전 버전": "an old version",
@@ -330,8 +331,10 @@ const clock = iso => { if (!iso) return ""; const d = new Date(iso); return `${d
 const after = sec => sec == null ? "" : sec < 60 ? T("+{n}초", {n: sec}) : sec < 3600 ? T("+{n}분", {n: Math.round(sec/60)}) : T("+{n}시간", {n: (sec/3600).toFixed(1)});
 // 값은 한국어 원문 — 보여 줄 때 T()
 const STATUS = {queued:"대기", held:"승인 대기", needs_routing:"대상 미정", delivered:"전달됨", running:"실행 중", done:"완료",
-  failed:"실패", timeout:"만료", expired:"만료", cancelled:"취소|상태", dropped:"소멸", sent:"보냄", not_delivered:"전달 못 함"};
-const KIND = {approve:"승인 대기", route:"대상 미정", "closed-pane":"창 닫힘", failed:"실패", mismatch:"창 짝 불일치", engine:"엔진"};
+  failed:"실패", timeout:"만료", expired:"만료", cancelled:"취소|상태", dropped:"소멸", sent:"보냄", not_delivered:"전달 못 함",
+  deferred:"미룸"};   // deferred: 작업 중에 와서 미뤄 둔 요청 (상태는 queued)
+const KIND = {approve:"승인 대기", route:"대상 미정", "closed-pane":"창 닫힘", failed:"실패", mismatch:"창 짝 불일치", engine:"엔진",
+  overdue:"회신 지연"};
 const TR = {broker:"중계", "claude-native":"Claude 직접", "herdr-direct":"Codex 직접"};
 const label = (map, k) => k in map ? T(map[k]) : k;
 
@@ -366,7 +369,7 @@ function renderAttention() {
       acts = `<button class="btn" data-open="${id}">${T("내용 보기")}</button>`;
       if (a.kind === "approve") acts += `<button class="btn primary" data-act="approve" data-id="${id}">${T("승인")}</button>`;
       if (a.kind === "route") acts += `<input class="route-in" data-route-in="${id}" value="${esc(routeDraft[a.task_id] || "")}" list="route-targets" placeholder="${esc(T("보낼 세션·역할"))}" aria-label="${esc(T("보낼 대상"))}" autocomplete="off"><button class="btn primary" data-act="route" data-id="${id}">${T("보내기")}</button>`;
-      if (a.kind === "approve" || a.kind === "route") acts += `<button class="btn" data-act="cancel" data-id="${id}">${T("취소")}</button>`;
+      if (a.kind === "approve" || a.kind === "route" || a.kind === "overdue") acts += `<button class="btn" data-act="cancel" data-id="${id}">${T("취소")}</button>`;
       acts = `<div class="acts">${acts}</div>`;
     }
     return `<li class="${esc(a.kind)}"><div class="kind">${esc(label(KIND, a.kind))}${a.age_s != null ? " · " + ago(new Date(Date.now() - a.age_s*1000).toISOString()) : ""}</div>` +
@@ -380,7 +383,9 @@ function node(s) {
   const st = s.pane_state === "open" ? s.agent_status + (s.pane_by === "title" ? T(" · 창 제목") : "")
     : label({closed:"창 닫힘|상태", mismatch:"짝 불일치", unknown:"?", worker:"worker"}, s.pane_state);
   const dot = s.pane_state === "open" ? s.agent_status : "closed";
-  const badge = [s.queued ? T("받을 것 {n}", {n: s.queued}) : "", s.held ? T("승인 대기 {n}", {n: s.held}) : ""].filter(Boolean).join(" · ");
+  const waiting = s.queued - (s.deferred || 0);
+  const badge = [waiting ? T("받을 것 {n}", {n: waiting}) : "", s.deferred ? T("미룸 {n}", {n: s.deferred}) : "",
+    s.held ? T("승인 대기 {n}", {n: s.held}) : ""].filter(Boolean).join(" · ");
   return `<button class="node ${esc(s.provider)} ${s.pane_state === "closed" ? "closed" : ""} ${s.pane_state === "mismatch" ? "mismatch" : ""}"` +
     ` data-session="${esc(s.name)}" aria-pressed="${F.session === s.name}" title="${esc(s.cwd || "")}">` +
     `<i class="dot ${esc(dot)}"></i><span class="name">${esc(s.name)}</span>` +
@@ -433,7 +438,7 @@ function renderFlows() {
     `<li class="row" role="option" tabindex="0" data-open="${esc(f.id)}" aria-selected="${f.id === selected}">` +
     `<span class="when" title="${esc(clock(f.at))}">${ago(f.at)}</span><span class="tr ${esc(f.transport)}">${esc(label(TR, f.transport))}</span>` +
     `<span class="who">${hl(f.from)}<span class="arrow">→</span>${hl(f.to || "?")}${f.teammate ? `<span class="mate">${T("팀원")}</span>` : ""}</span>` +
-    `<span class="stat s-${esc(f.status)}">${esc(label(STATUS, f.status))}</span>` +
+    `<span class="stat s-${esc(f.deferred ? "deferred" : f.status)}">${esc(label(STATUS, f.deferred ? "deferred" : f.status))}</span>` +
     `<span class="sum">${hl(f.summary || "")}</span>` +
     (f.excerpt && f.excerpt !== f.summary ? `<span class="ex">${hl(f.excerpt)}</span>` : "") + `</li>`).join("")
     : `<li class="empty">${F.q ? T("“{q}” 에 맞는 흐름이 없습니다. 검색어나 기간을 바꿔 보세요.", {q: esc(F.q)}) : T("이 조건의 흐름이 없습니다. 기간을 늘리거나 필터를 풀어 보세요.")}</li>`;
@@ -485,7 +490,7 @@ async function openDetail(id) {
     const acts = !t.terminal ? `<div class="acts">` + (t.status === "held" ? `<button class="btn primary" data-act="approve" data-id="${esc(t.task_id)}">${T("승인")}</button>` : "") +
       `<button class="btn" data-act="cancel" data-id="${esc(t.task_id)}">${T("취소")}</button></div>` : "";
     const kindName = T({direct: "같은 provider 직접 전달", native: "Claude 직접 메시지 (관찰)"}[t.kind] || "Claude ↔ Codex 중계");
-    box.innerHTML = `<div class="meta">${esc(t.task_id)} · ${esc(label(STATUS, t.status))} · ${kindName}${t.sandbox ? T(" · 권한 {p}", {p: esc(t.sandbox)}) : ""}</div>` +
+    box.innerHTML = `<div class="meta">${esc(t.task_id)} · ${esc(label(STATUS, t.deferred ? "deferred" : t.status))} · ${kindName}${t.sandbox ? T(" · 권한 {p}", {p: esc(t.sandbox)}) : ""}</div>` +
       `<h3>${esc(t.title)}</h3><div class="parties">${chip(t.from, t.from_session)}<span aria-hidden="true">→</span>${chip(t.to, t.to_session)}</div>` + acts +
       (tl ? `<h4>${T("중계 경과")}</h4><ol class="tl">${tl}</ol>` : "") +
       `<h4>${T("보낸 내용")}</h4><pre>${hl(t.body)}</pre>` +

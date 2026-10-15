@@ -119,6 +119,35 @@ EN: dict[str, str] = {
     "보냄": "Sent", "라우팅": "Routed", "안전 판단": "Safety check", "승인 판단": "Approval check", "승인": "Approved",
     "취소": "Cancelled", "소멸": "Dropped", "대상 지정": "Routed by you", "실행": "Started", "전달": "Delivered",
     "대기": "Waiting", "회신": "Reply", "만료": "Expired", "알림": "Notified",
+    "미룸": "Deferred", "바로 넣음": "Typed in now", "회신 지연": "Reply overdue", "관계 판단": "Relation check",
+    # 대기 요청과의 관계
+    " — 뒤에 온 {via} 를 취소 요청으로 보고 broker 가 넣기 전에 취소":
+        " — the broker cancelled it before delivery, reading the later {via} as a cancellation",
+    " · 급한 요청으로 보고 미룬 요청 맨 앞에 둠 (Jev {pct})": " · judged urgent, so it goes first among deferred requests (Jev {pct})",
+    "대기 중이던 {target} 을(를) 취소하는 메시지로 보고 넣기 전에 취소함 ({how})":
+        "Read as cancelling the waiting {target}, so {target} was cancelled before delivery ({how})",
+    "대기 중이던 {target} 을(를) 취소하고 대신 하라는 새 요청으로 보고, 그 요청을 넣기 전에 취소함 ({how})":
+        "Read as replacing the waiting {target}, so {target} was cancelled before delivery ({how})",
+    "대기 중인 요청과 무관한 새 요청으로 판단 ({how})": "Judged a new request, unrelated to the waiting ones ({how})",
+    "대기 중인 {target} 을(를) 고치는 내용으로 보고 함께 넣도록 묶음 ({how})":
+        "Read as changing the waiting {target}, so the two go in together ({how})",
+    "대기 중인 {target} 을(를) 취소하려는 것으로 보이나 확실하지 않아 함께 넣도록 묶음 ({how})":
+        "Looks like it cancels the waiting {target}, but not certainly, so the two go in together ({how})",
+    "Jev {rel} {pct}": "Jev {rel} {pct}", "취소|관계": "cancel", "취소 후 대체": "replace", "수정": "change", "새 요청": "new request",
+    # 작업 중 도착 판단
+    "받는 세션이 지금 하던 작업과 무관하다며 미룸 — 지금 작업을 마친 뒤 넣음":
+        "The receiver deferred it as unrelated to its current work — it is typed in after that work",
+    "작업 중에 도착 — 지금 작업과 무관하다고 보고 지금 작업을 마친 뒤 넣도록 미룸 ({how})":
+        "Arrived while the receiver was working — judged unrelated, so it waits until the current work is done ({how})",
+    " · 하던 작업: {titles}": " · current work: {titles}",
+    "{to} 이(가) 지금 작업을 마치면 넣음 (미룬 요청 {n}번째)": "Typed into {to} once its current work is done (deferred #{n})",
+    "작업 중에 도착 — 지금 작업과 관련(취소·수정·우선순위)으로 보고 바로 넣음 ({how})":
+        "Arrived while the receiver was working — judged relevant (cancel, change or priority), so it was typed in "
+        "right away ({how})",
+    "넣은 뒤 {h}시간 동안 회신이 없어 보낸 세션에 알림": "No reply {h}h after delivery — the sender was told",
+    "Jev 바로 반영 필요 {pct}": "Jev: act now {pct}", "규칙: {words}": "rule: {words}", "규칙: 해당 말 없음": "rule: no matching words",
+    "{to} 이(가) {h}시간째 회신하지 않았습니다. 내용을 확인하고 필요 없으면 취소하세요.":
+        "{to} has not replied for {h}h. Check it, and cancel it if it is no longer needed.",
     # 중계 경과: 설명
     "작업 (회신 필요)": "task (reply expected)", "메시지 (회신 없음)": "message (no reply)", "회신 알림": "reply notice",
     "(대상 생략)": "(no target)",
